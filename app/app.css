@@ -4013,6 +4013,7 @@ article.markdown-section {
 }
 
 .dpr-choice-pill {
+  position: relative;
   border: 1px solid rgba(46, 125, 50, 0.35);
   border-radius: 6px;
   padding: 5px 9px;
@@ -4025,6 +4026,12 @@ article.markdown-section {
   cursor: pointer;
   transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease,
     box-shadow 0.14s ease;
+}
+
+.dpr-choice-pill.is-featured-conference-year {
+  border-color: rgba(234, 179, 8, 0.62);
+  background: #fffbeb;
+  box-shadow: 0 1px 5px rgba(234, 179, 8, 0.18);
 }
 
 .dpr-choice-pill.has-conference-stats {
@@ -4043,6 +4050,24 @@ article.markdown-section {
   align-items: baseline;
   justify-content: center;
   gap: 0;
+}
+
+.dpr-choice-feature-star {
+  position: absolute;
+  top: -6px;
+  right: -5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #fef3c7;
+  color: #d97706;
+  border: 1px solid rgba(217, 119, 6, 0.36);
+  font-size: 9px;
+  line-height: 1;
+  pointer-events: none;
 }
 
 .dpr-choice-year {
