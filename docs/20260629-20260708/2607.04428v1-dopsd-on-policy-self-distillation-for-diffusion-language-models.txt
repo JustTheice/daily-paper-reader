@@ -1,0 +1,627 @@
+Title: dOPSD: On-Policy Self-Distillation for Diffusion Language Models
+
+URL Source: https://arxiv.org/pdf/2607.04428v1
+
+Published Time: Tue, 07 Jul 2026 02:19:37 GMT
+
+Number of Pages: 12
+
+Markdown Content:
+# dOPSD: On-Policy Self-Distillation for Diffusion Language Models 
+
+## Phuong Tuan Dat 1, Qi Li 1, Xinchao Wang 1∗
+
+> 1
+
+National University of Singapore {phuongtuandat, liqi}@u.nus.edu, xinchao@nus.edu.sg 
+
+https://github.com/tuandattt/dOPSD 
+
+Abstract 
+
+Diffusion large language models (dLLMs) generate text by iteratively denoising a masked sequence, offering a paral-lel alternative to autoregressive models, but eliciting strong reasoning through post-training remains difficult: supervised fine-tuning is off-policy and suffers from exposure bias, while reinforcement learning gives only sparse, sequence-level re-wards and is hard to apply without tractable sequence likeli-hoods. On-policy self-distillation (OPSD) offers a promising alternative, using one model as both student and teacher to pro-vide dense, token-level, on-policy supervision, but its effec-tiveness hinges on giving the teacher privileged information (PI) - typically an instance-specific ground-truth reference unavailable at inference - so the student ends up distilling a weak PI-free consensus policy that yields little improve-ment on dLLM reasoning. We introduce dOPSD, which in-stead derives the teacher’s privilege directly from the student’s own denoising trajectory, evaluating masked positions using later, more-decoded steps of that same trajectory rather than an external label, so the teacher’s advantage emerges from the model’s own decoding process; on Dream and LLaDA, dOPSD improves both in-domain math reasoning and out-of-domain code generation, outperforming supervised and on-policy baselines. 
+
+## 1 Introduction 
+
+Diffusion large language models (dLLMs) have recently emerged as a competitive, non-autoregressive alternative to standard left-to-right language models (Yu, Li, and Wang 2025; Song et al. 2025). Rather than generating one token at a time, a dLLM begins from a fully masked sequence and produces text through an iterative denoising process: at each step it predicts the clean tokens at the masked positions and commits the most confident ones, progressively filling in the sequence. This paradigm scales to billions of parameters and rivals autoregressive models on general language tasks, while offering parallel decoding and bidirectional context. Yet eliciting strong reasoning from dLLMs through post-training remains challenging. Supervised fine-tuning on ref-erence solutions is off-policy and suffers from exposure bias, while reinforcement learning with verifiable rewards (RLVR) (Wen et al. 2025; Yang et al. 2026) is costly, supplies only 
+
+> ∗
+
+Corresponding author. 
+
+a sparse sequence-level reward, and is itself hard to adapt to diffusion models that lack a tractable sequence likelihood. This motivates a post-training signal that is simultaneously dense, on-policy, and free of external teachers or reward models. On-policy self-distillation (OPSD) was recently proposed for autoregressive LLMs as exactly such a signal (Zhao et al. 2026). A single model plays two roles that differ only in their conditioning context: a student that sees only the problem, and a teacher that is additionally conditioned on PI, a ground-truth reference solution. The student generates an on-policy rollout, and is trained to match the teacher’s dense, per-token distribution along that rollout, needing neither a larger ex-ternal teacher nor a reward model. The teacher’s strength, however, comes entirely from an external, instance-specific label that the student never sees at inference. Recent analy-sis shows this is more than a practical nuisance: unable to condition on the PI, OPSD ends up optimizing a weak, PI-marginalized “consensus” of the per-problem teachers rather than any single strong teacher (Zhu et al. 2026). The key, then, is not to discard the privileged teacher, but to source its priv-ilege from something the model itself produces, keeping the dense, on-policy signal while removing the dependence on external reference solutions or chain of thought (CoT) (Wei et al. 2022). Our central observation is that diffusion decoding sup-plies such privilege intrinsically. As a dLLM unmasks its sequence, the student’s own denoising trajectory becomes a sequence of progressively more informed contexts: a later, more-unmasked snapshot reveals tokens an earlier step had to predict from scratch. A teacher positioned later along the trajectory therefore enjoys a genuine “peek-ahead” advantage over the student positioned earlier, about the very positions still to predict. This context is on-policy and self-generated rather than an external label, and is unique to diffusion: an au-toregressive model, committing tokens once and left to right, has no comparable ladder of increasingly-informed views of one generation. We instantiate this idea as dOPSD , an on-policy self-distillation method for diffusion language models whose PI is drawn from the student’s own denoising trajectory rather than an external reference solution. The student rolls out a completion while recording its decoding history; at an in-termediate, heavily masked step it predicts the still-masked 
+
+> arXiv:2607.04428v1 [cs.CL] 5 Jul 2026
+
+positions, and the same model, acting as the teacher, evalu-ates those same positions from later steps of that trajectory, where more surrounding tokens have already been decoded and the teacher is therefore better informed about what the masked positions should be. We distill the teacher’s distri-bution into the student at the masked positions with a token-level Jensen–Shannon objective. The intermediate trajectory state is simply the completion with the undecoded positions re-masked, so it slots directly into the standard dLLM for-ward pass with no architectural change. To keep the self-distillation signal trustworthy, we verify each rollout against the final answer and distill only from correct rollouts. The main contributions of this work are summarized as follows: 
+
+• We show that the original OPSD recipe does not transfer to diffusion language models: its reliance on an external, instance-specific reference solution as PI, which is absent at inference and aggregated into a weak PI-marginalized consensus, fails to yield reliable gains for dLLMs. 
+
+• We propose dOPSD , a novel post-training method for dLLMs that retains the privileged-teacher principle of OPSD but sources the privilege from the student’s own de-noising trajectory, making it effective under diffusion de-coding and able to outperform supervised, reinforcement-learning, and on-policy self-distillation baselines. 
+
+• We conduct comprehensive experiments on Dream and LLaDA, showing that dOPSD improves performance both on in-domain mathematical reasoning and on out-of-domain code generation, and we analyze how the teacher’s peek-ahead horizon and rollout verification shape the learning signal. 
+
+## 2 Related Work 
+
+2.1 Diffusion Language Models 
+
+Discrete and masked diffusion models generate sequences by reversing a corruption process that progressively masks to-kens, predicting the clean tokens at masked positions instead of decoding strictly left to right (Austin et al. 2021a; Lou, Meng, and Ermon 2023; Sahoo et al. 2024). Recent open models such as LLaDA (Nie et al. 2025) and Dream (Ye et al. 2025) scale this paradigm to billions of parameters, retaining parallel, confidence-ordered decoding and bidirec-tional context. Post-training these models for reasoning is an active area: several works adapt RLVR to diffusion lan-guage models, where the absence of a tractable sequence log-likelihood has prompted likelihood surrogates, inpainting-based guidance, and sequence-level formulations (Zhao et al. 2025a,b; Ou et al. 2025). These methods inherit RLVR’s sparse, sequence-level reward; dOPSD instead provides a dense, token-level signal on the model’s own decoding tra-jectory. 
+
+2.2 Knowledge Distillation and On-Policy Distillation 
+
+Knowledge distillation transfers a teacher’s soft predictions into a student (Hinton, Vinyals, and Dean 2015). On a fixed corpus it is off-policy and suffers the same train-inference mismatch as SFT: the student is supervised on prefixes it would not itself produce. On-policy distillation instead trains the student on its own generations, so the teacher gives dense feedback exactly where the student goes (Agarwal et al. 2024; Lu and Thinking Machines Lab 2025), mirroring imitation learning and its remedy for compounding errors (Ross, Gor-don, and Bagnell 2011). These approaches assume a separate, larger teacher; ours requires none, as the same model supplies both roles. 
+
+2.3 Self-Distillation with Privileged Information 
+
+A model can act as its own teacher when given PI unavailable to the student. OPSD conditions the teacher on a ground-truth reference solution and distills its per-token distribution into the student along on-policy rollouts (Zhao et al. 2026), building on the intuition, also exploited by rationalization-based self-training such as STaR (Zelikman et al. 2022), that explaining a known answer is easier than producing one. A recent analysis dissects how the structure of the PI gov-erns whether such self-distillation helps: when PI is instance-specific and absent at test time, the student can only recover a weak PI-marginalized consensus of the PI-conditioned teach-ers (Zhu et al. 2026). A closely related method, On-Policy Context Distillation (OPCD), internalizes an in-context sig-nal, an optimized system prompt or transferable knowledge distilled from a model’s own past solution traces, into the student’s weights by minimizing the reverse KL to a context-conditioned teacher along the student’s own generations (Ye et al. 2026). Its privileged context typically encodes a shared, reusable rule rather than a per-problem label, exactly the regime in which marginalizing over the privilege stays be-nign; it also remains autoregressive. dOPSD inherits this single-model, privileged-teacher construction but differs in two ways: it operates on diffusion language models, and its privilege is a later state of the student’s own denoising trajec-tory rather than an external reference solution, self-generated and intrinsic to diffusion decoding. 
+
+## 3 Method 
+
+We first review on-policy self-distillation (OPSD) for au-toregressive models (Section 3.1). We then introduce how a diffusion language model decodes and analyze why OPSD fails in this setting (Section 3.2), and finally present dOPSD (Section 3.3), whose full training pipeline is illustrated in Figure 1a. 
+
+3.1 On-Policy Self-Distillation 
+
+Setup. Given a dataset S = {(xi, y ⋆i )}Ni=1 with input x
+
+and full solution y⋆ available only during training (e.g., a reference solution, but possibly a context or system prompt), OPSD post-trains a single model πθ to perform well when conditioned on x alone. We write πθ (· | c) for the next-token distribution over a vocabulary V given a context c.
+
+Student, teacher, and objective. From the same param-eters θ, OPSD forms a student pS (· | x) ≜ πθ (· | x)
+
+that matches the inference-time condition and a teacher 
+
+pT (· | x, y ⋆) ≜ πθ (· | x, y ⋆) that also reads the PI; the teacher is stronger only in that it may exploit information the student lacks. To stay on-policy, the student is supervised on Dataset      
+
+> �,y∗
+> Sample
+> Student Distribution
+> Teacher Distribution
+> Decoding Trajectory
+> On Policy
+> Sample
+> Rollout Verifier Learning Objective
+> Shared Model
+> Gradient
+> �: Prompt
+> y∗:Reference Solution
+> y: Student ’s Rollout
+
+(a) Training pipeline. [MASK]  [MASK]  [MASK]  [MASK]  [MASK]      
+
+> [MASK]
+> [MASK] [MASK] [MASK]
+> [MASK] [MASK]
+> Average Teacher Target
+> Distribution
+> Continue to Average
+> Stop Averaging
+
+(b) Teacher target construction. 
+
+Figure 1: Overview of dOPSD. (a) A single shared model plays both the student and the teacher. Given a problem x with reference answer y⋆ sampled from the dataset, the model rolls out an on-policy decoding trajectory ξ = si → · · · → sK → ˆy. The 
+
+student is scored at an intermediate, still-masked step si, ps = πθ (· | x, s i), while the same model acting as the teacher scores the same positions from later, more-decoded states of the trajectory, an on-policy peek-ahead that uses no external solution. A rollout verifier β = 1[ˆ y = y⋆] keeps only correct rollouts, and the student is trained to match the stop-gradient teacher target, with gradients flowing only into the student. (b) Construction of that teacher target at a masked position: the teacher’s predictive distribution is averaged over the future decoding steps where the position is still masked (solid, the set Ti) and dropped once the position has been decoded (hatched, where the model would merely copy the committed token); the average is the teacher target 
+
+¯pi the student is distilled toward. its own samples ˆy ∼ pS (· | x), with both policies scored along this rollout and matched per token, 
+
+LOPSD (θ) = E(x,y ⋆)∼S Eˆy∼pS (·| x)
+
+ 1
+
+|ˆy|
+
+> |ˆy|
+
+X
+
+> n=1
+
+D p nT p nS
+
+,
+
+(1) where p nT = pT (· | x, y ⋆, ˆy<n ), p nS = pS (· | x, ˆy<n ), and gradients flow only through the student (the teacher is a stop-gradient target). The divergence D is the forward KL, the reverse KL, or the generalized Jensen–Shannon divergence interpolating between them with a weight β ∈ [0 , 1] ,
+
+JSD β (pT ∥ pS ) = β KL( pT ∥ m) + (1 − β) KL( pS ∥ m),
+
+(2) with mixture m = βp T + (1 − β)pS . This yields dense, on-policy, token-level supervision with no external teacher or reward model. 
+
+3.2 Why OPSD Fails for Diffusion Language Models 
+
+Decoding as a denoising trajectory. A dLLM generates a length-L completion for a prompt x by reverse denoising. Starting from a fully masked sequence, it repeatedly predicts the clean token at each masked position and commits only the most confident ones, freezing them for the rest of decoding. Over K steps this traces a sequence of partial states 
+
+s0 → s1 → · · · → sK = ˆ y, (3) where s0 is fully masked, sK = ˆ y is the finished completion, and each intermediate sk equals ˆy with its not-yet-decoded positions held at ⟨mask ⟩. Let Mk ⊆ { 1, . . . , L } be the po-sitions still masked at step k. For the decoders we consider, a token is kept once decoded, so the masked set shrinks monotonically, M0 ⊇ M1 ⊇ · · · ⊇ MK = ∅; our method requires only that each sk is a genuine intermediate state visited during decoding. At any state the model provides a masked-prediction distribution πθ (· | x, s k)i over V at each masked position i ∈ Mk. Applying OPSD here meets two obstacles: one inherited from OPSD itself, the other specific to how a dLLM decodes. We examine each in turn: the PI col-lapses into a PI-free policy, and the random masking OPSD imposes drifts off the model’s actual decoding order. 
+
+The privilege is external (PI-free collapse). The benefits of Section 3.1 all flow from the privileged teacher, which is also where the method breaks. The student is never condi-tioned on y⋆, so minimizing the expected divergence over the PI distribution D(· | x) drives it toward a single PI-free 
+
+policy (Zhu et al. 2026), the normalized geometric mean of the per-PI teachers, 
+
+p⋆S (y | x) = exp  Ey⋆∼D (·| x) log pT (y | x, y ⋆)P 
+
+> y′
+
+exp  Ey⋆∼D (·| x) log pT (y′ | x, y ⋆) .
+
+(4) A response survives this average only when it is supported across values of y⋆. When y⋆ encodes a shared latent rule (a system prompt or alignment preference), the average com-presses it into a reusable behavior; when y⋆ is instance-specific , as a per-problem reference solution is, each input in-duces its own incompatible teacher and the student collapses onto a weak consensus far worse than any single teacher. Mathematical reasoning, our target, is squarely this instance-specific case, so OPSD’s gains evaporate exactly where we want them. Figure 2c previews this collapse on Dream: ported directly to a dLLM, OPSD trains to substantially lower GSM8K accuracy than our trajectory-based dOPSD (Section 3.3), and, exactly as the PI-free account predicts, conditioning the teacher on the richer, fully instance-specific reference solution is dramatically worse than an answer-only teacher, trailing by roughly 15 points. 
+
+The noise is off the decoding path. The second obstacle is specific to how a dLLM decodes. The autoregressive recipe has no notion of masking: it scores every token of the rollout in one pass. The natural port is to roll out a completion ˆy, re-mask a uniformly random subset of its positions, and match teacher and student at those positions. That random corrup-tion, however, is not how a dLLM decodes. At inference the masked positions of a partial state follow a confidence-ordered, easy-to-hard schedule, and their visible context is whatever the model has already committed; a uniformly ran-dom mask over the finished rollout produces partial states the model never visits. Figure 2a measures this drift directly: we roll out completions, recover the confidence-ordered de-coding frontier of each, and ask what fraction of a uniformly masked subset lands on tokens the model would already have committed, those above the frontier. At a 10% mask roughly 
+
+90% of the masked positions are such already-decoded-easy tokens, and even at a 50% mask about half are; masking instead the not-yet-decoded positions of a genuine decoding step puts zero mass above the frontier by construction. The supervision then falls off the model’s own decoding path, so even setting the PI problem aside the signal is mismatched with inference. Training bears out the cost: Figure 2b shows that scoring the student at random masked tokens of the fin-ished rollout steadily degrades GSM8K accuracy over train-ing, whereas scoring it at genuine random decode steps stays high and stable. Both failures share one cause: the privilege and the noise are imposed from outside the model rather than drawn from its own generation. 
+
+3.3 dOPSD 
+
+dOPSD removes both obstacles by reading the student’s noisy state, the teacher’s privilege, and the noise itself off a single object: the student’s own decoding trajectory (Eq. 3). For each prompt the student decodes a completion and we record its trajectory s0, . . . , s K ; everything below is taken from this trajectory, with nothing masked or supplied from outside it. 
+
+Student state: a real unmasking step. Instead of re-masking the finished rollout at random, we sample an in-termediate decoding step k uniformly at random among the steps whose masked fraction |Mk|/L is still above a thresh-old τ , so the state remains substantially masked and offers enough positions to score. The student is then evaluated ex-actly as during decoding: at the genuinely masked positions 
+
+Mk, conditioned on the real partial state sk. The noise is thus a true intermediate step of the model’s own denoising, keeping the supervised states on the inference path. 
+
+Teacher privilege: the remaining trajectory. The teacher scores the same positions Mk, but with the extra context that the student’s own later decoding supplies. For a masked position i ∈ Mk, let 
+
+Ti = { t : k < t ≤ K, i ∈ Mt } (5) collect the future steps at which i is still masked. At each such step the model has committed more of the surrounding tokens, so a masked-prediction pass on the later state st yields a better-informed distribution over position i than the student had at step k. We take the teacher target ¯pi to be the average of these predictions (Figure 1b), 
+
+¯pi = 1
+
+|T i|
+
+X
+
+> t∈T i
+
+πθ (· | x, s t)i. (6) Averaging over the entire remaining masked lifetime of i,rather than a single later snapshot, gathers every step at which the teacher is genuinely better informed while i is still pre-dicted rather than copied : steps at which i has already been decoded are excluded from Ti, since there the model would merely read back the committed token instead of predicting it. A position committed at the very next step ( Ti = ∅) has no such genuine future prediction, and we fall back to the end-point teacher πθ (· | x, ˆy)i. All of this privilege is produced by the model’s own decoding, so it is on-policy, self-generated, and uses no reference solution, which is exactly what the PI-free analysis calls for. 
+
+Objective. We distill the averaged teacher ¯pi into the present-step student at the masked positions with the token-level generalized Jensen–Shannon divergence of Eq. (2), 
+
+ℓ(x, ˆy) = 1
+
+|Mk|
+
+X
+
+> i∈Mk
+
+JSD β
+
+
+
+sg  ¯pi
+
+ πθ (· | x, s k)i
+
+
+
+, (7) where sg[ ·] stops the gradient on the teacher target. The sum runs only over Mk: positions already decoded by step k
+
+are fixed context and incur no loss, matching the masked-prediction objective the model is trained with. Both terms are ordinary masked-prediction passes, so dOPSD adds no architectural change; its only extra cost is one teacher forward per distinct remaining step in Eq. (6). 
+
+Verifying the rollout. A self-generated trajectory carries no guarantee of correctness, and distilling a confidently wrong rollout would only reinforce the error. We therefore verify each finished completion ˆy against the ground-truth final answer and keep only correct rollouts in the loss; tra-jectories with a wrong answer are discarded and contribute no gradient. This verification is not essential to the method: when the dataset provides no reference answer, dOPSD can simply distill from every rollout, which we confirm in Sec-tion 4.3. The objective averages ℓ over the verified-correct rollouts, 
+
+LdOPSD (θ) = Ex Eˆy∼πθ (·| x)
+
+ 1[ˆ y correct ] ℓ(x, ˆy) . (8) The verifier reads only the short final answer, not a reference solution, so the teacher’s privilege stays entirely trajectory-derived. Algorithm 1 summarizes the full procedure. 
+
+## 4 Experiments 
+
+4.1 Experimental Setup 
+
+Models. We build on two open, instruction-tuned diffu-sion language models, Dream-7B-Instruct (Ye et al. 2025) and LLaDA-8B-Instruct (Nie et al. 2025), and apply every method as a post-training stage on top of them. 
+
+Training data. We focus on mathematical reasoning and train on MixChain-Z-PRM12K, a corpus of competition-style problems paired with chain-of-thought solutions and verifiable final answers. To probe generalization, we ad-ditionally evaluate the trained models, without any further fine-tuning, on out-of-distribution code generation. 0.2 0.4 0.6 0.8 
+
+> Masked fraction p
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Off-path fraction
+> uniform mask
+> on-policy mask
+
+(a) Off-path fraction of a uniform mask. 200 500 800 1100  
+
+> Step
+> 70
+> 72
+> 74
+> 76
+> 78
+> 80
+> 82
+> 84
+> Acc@1
+> dOPSD random decode step
+> dOPSD random mask token
+
+(b) Random mask tokens vs. decode steps. 200 500 800 1100  
+
+> Step
+> 65.0
+> 67.5
+> 70.0
+> 72.5
+> 75.0
+> 77.5
+> 80.0
+> 82.5
+> Acc@1  dOPSD
+> OPSD answer only
+> OPSD full solution
+
+(c) Performance of OPSD variants vs. dOPSD. 
+
+Figure 2: OPSD cannot be applied directly to diffusion language models (Dream-7B-Instruct). (a) The fraction of a uniformly masked subset that lands above the on-policy decoding frontier, easy tokens the model would already have committed, is large at small mask fractions p, whereas a mask taken from a genuine decoding step (blue) is zero by construction. (b) Scoring the student at random mask tokens of the finished rollout (off-path) degrades GSM8K accuracy over training, while scoring it at genuine random decode steps stays high. (c) Ported directly to a dLLM, both OPSD variants train to substantially lower accuracy than our trajectory-based dOPSD, and conditioning the teacher on the full reference solution collapses performance. Algorithm 1: dOPSD Training 
+
+Require : dataset S = {(xi, a i)}Ni=1 with final answers ai;diffusion LM πθ ; mask threshold τ
+
+1: while not converged do 
+
+2: Sample a minibatch B ⊂ S 
+
+3: for all (x, a ) ∈ B do 
+
+4: Roll out ˆy with its trajectory (s0, . . . , s K ) ∼ πθ (· | 
+
+x)
+
+5: if ˆy disagrees with the gold answer a then 
+
+6: ℓ(x) ← 0 {discard wrong rollout} 
+
+7: else 
+
+8: Sample step k uniformly from {k′ : |Mk′ |/L > τ }
+
+9: Build teacher targets {¯pi}i∈Mk over the remain-ing masked steps (Eq. (6)) 
+
+10: Score Mk via Eq. (7) to obtain ℓ(x)
+
+11: end if 
+
+12: end for 
+
+13: LdOPSD ← 1
+
+> |B|
+
+P 
+
+> (x,a )∈B
+
+ℓ(x); update θ
+
+14: end while Baselines. We compare dOPSD against four post-training methods trained on the same data and base models, together with the untuned base model: (i) SFT , supervised fine-tuning on the reference solutions, an off-policy imitation baseline; (ii) GRPO (Zhao et al. 2025a), group-relative policy op-timization with a verifiable final-answer reward, adapted to diffusion decoding; (iii) OPSD (answer-only) , the on-policy self-distillation port whose teacher is conditioned only on the final answer as PI; and (iv) OPSD (full-solution) , the same port whose teacher is conditioned on the complete reference solution. The two OPSD variants are exactly the naive trans-fers analyzed in Section 3.2. 
+
+Training details. All methods use parameter-efficient LoRA (Hu et al. 2022) fine-tuning with rank 32 and scal-ing α = 32 , applied to the q_proj , k_proj , v_proj ,
+
+o_proj , gate_proj , up_proj , and down_proj pro-jections. Training runs on 8 GPUs with a per-device mini-batch size of 4, optimized with AdamW at a peak learning rate of 2 × 10 −5 for 3 epochs; for every method we report the best checkpoint. For dOPSD we set the trajectory mask threshold to τ = 0 .5, so the student is scored at a decoding step whose answer region is still at least half masked. 
+
+Evaluation. We measure in-domain mathematical rea-soning on GSM8K (Cobbe et al. 2021) and MATH500 (Hendrycks et al. 2021), and out-of-distribution code gen-eration on HumanEval (Chen et al. 2021) and MBPP (Austin et al. 2021b), reporting accuracy on the math benchmarks and pass@1 on the code benchmarks. 
+
+4.2 Main Results 
+
+dOPSD is the only method that improves the base model. 
+
+Across both Dream-7B-Instruct and LLaDA-8B-Instruct, dOPSD attains the best score on every benchmark, in-domain and out-of-distribution (Table 1). On Dream it raises GSM8K from 81 .41 to 83 .04 and MATH500 from 38 .97 
+
+to 42 .20 ; on LLaDA it improves MATH500 by 4.76 points (31 .24 → 36 .00 ) and GSM8K by 1.64 . Every baseline, by contrast, matches or falls below the base model on nearly ev-ery benchmark and improves it by at most a marginal amount, whereas dOPSD improves it across the board. 
+
+Supervised, RL, and naive OPSD baselines degrade rea-soning. SFT falls below the base model on all four tasks for both backbones, consistent with the exposure bias of off-policy imitation. GRPO stays at or below the base model as In-Domain: Math Reasoning OOD: Code Generation Method GSM8K MATH500 Avg. HumanEval MBPP Avg. 
+
+Base Model: Dream-7B-Instruct 
+
+Base 81.41 38.97 60.19 52.54 57.43 54.99 SFT 80.44 36.49 58.47 48.27 56.94 52.61 GRPO 81.28 37.86 59.57 50.24 57.32 53.78 OPSD (answer-only) 80.34 37.23 58.79 47.28 55.49 51.39 OPSD (full-solution) 67.25 35.72 51.49 40.86 49.28 45.07 dOPSD (Ours) 83.04 42.20 62.62 56.71 58.49 57.60 
+
+Base Model: LLaDA-8B-Instruct 
+
+Base 71.23 31.24 51.24 36.12 38.45 37.29 SFT 69.45 30.12 49.79 34.27 35.24 34.76 GRPO 70.45 32.77 51.61 35.78 36.44 36.11 OPSD (answer-only) 71.47 31.45 51.46 35.54 36.24 35.89 OPSD (full-solution) 57.86 24.34 41.10 30.67 28.78 29.73 dOPSD (Ours) 72.87 36.00 54.44 39.63 39.54 39.59 
+
+Table 1: Performance of dOPSD against supervised, reinforcement-learning, and on-policy self-distillation baselines on Dream-7B-Instruct and LLaDA-8B-Instruct. All methods are trained on the mathematical-reasoning corpus; code generation is evaluated out of distribution. The best result in each column is in bold and the second best is underlined. well (its only gain is +1 .53 on LLaDA MATH500), reflecting the sparse, sequence-level reward and the difficulty of policy optimization without a tractable sequence likelihood. The distillation ports fare no better: OPSD (answer-only) hovers around the base model, while OPSD (full-solution) collapses, losing 14 .2 GSM8K points on Dream ( 81 .41 → 67 .25 ) and 
+
+13 .4 on LLaDA ( 71 .23 → 57 .86 ). 
+
+The OPSD ports confirm the PI-free hypothesis. These patterns are precisely what our analysis in Section 3.2 pre-dicts, and we read them as direct support for the PI-free hy-pothesis. First, because the student can never condition on the instance-specific reference solution at inference, OPSD can only distill the weak PI-marginalized consensus of Eq. (4); accordingly, OPSD (answer-only) never rises meaningfully above the base model. Second, the failure should worsen as the PI becomes richer and more instance-specific, yielding more sharply incompatible per-problem teachers. The data bear this out: the ordering OPSD (full-solution) < OPSD (answer-only) holds on every benchmark and both back-bones, with the full-solution teacher collapsing reasoning outright. dOPSD avoids the failure mode entirely by sourc-ing the teacher’s privilege from the model’s own trajectory rather than an external label. 
+
+Gains transfer out of distribution. Although trained only on mathematics, dOPSD is the sole method that also im-proves code generation, lifting HumanEval by 4.17 points on Dream ( 52 .54 → 56 .71 ) and 3.51 on LLaDA ( 36 .12 →
+
+39 .63 ), whereas SFT and both OPSD ports lose ground. The trajectory-derived signal thus strengthens reasoning with-out the catastrophic forgetting of the supervised and PI-conditioned baselines. 
+
+4.3 Ablation Studies 
+
+Forward versus reverse KL. dOPSD distills with the gen-eralized Jensen–Shannon divergence of Eq. (7), whose two limiting cases are forward KL ( β → 0), our default, and reverse KL ( β → 1). Figure 3 compares them under other-wise identical settings. Forward KL is the stronger choice, winning on every task-backbone cell for both models. The advantage is consistent across both domains; for instance, LLaDA HumanEval rises from 37 .42 to 39 .63 and Dream MBPP from 50 .61 to 58 .49 . We attribute this to the direc-tion of the divergence: forward KL is mass-covering, so the student is trained to reproduce the entire peek-ahead teacher distribution and absorb all of its trajectory-derived privileged signal, whereas the mode-seeking reverse KL lets the student concentrate on a single mode and discard part of that signal. We therefore use forward KL throughout. 
+
+Teacher horizon: how many future steps. The teacher target ¯pi (Eq. (6)) averages the teacher’s prediction over the future steps at which position i is still masked. We ablate how far into the trajectory this window reaches by capping it at 0, 50 , 100 , or 200 future steps, versus the full remaining trajectory (our default), on Dream (Table 2). Performance improves as the teacher looks further ahead: with no future step the teacher carries no peek-ahead privilege and trails the base model badly (GSM8K 70 .44 ), and each wider horizon adds more genuinely-decoded context that sharpens the tar-get. Averaging over the full remaining trajectory is best on every benchmark by a wide margin (e.g., GSM8K 83 .04 vs. 
+
+78 .14 at 200 steps, and MBPP 58 .49 vs. 48 .92 ), confirming that the privileged signal is strongest when the teacher ag-gregates the model’s entire subsequent decoding rather than a truncated look-ahead. We therefore use the full horizon throughout. GSM8K MATH500 HumanEval MBPP  
+
+> 30
+> 40
+> 50
+> 60
+> 70
+> 80
+> 90
+> Accuracy / Score
+> 82.03 83.04
+> 41.60 42.20
+> 52.44
+> 56.71
+> 50.61
+> 58.49
+> Dream-7B-Instruct
+> Reverse KL Forward KL
+
+(a) Dream-7B-Instruct GSM8K MATH500 HumanEval MBPP     
+
+> 20
+> 30
+> 40
+> 50
+> 60
+> 70
+> 80
+> Accuracy / Score
+> 71.16
+> 72.87
+> 35.19 36.00 37.42
+> 39.63 38.18 39.54
+> LLaDA-8B-Instruct
+> Reverse KL Forward KL
+
+(b) LLaDA-8B-Instruct 
+
+Figure 3: Effect of the distillation divergence in dOPSD: forward KL ( β → 0, default) versus reverse KL ( β → 1), with all other settings fixed. Best results in each benchmark are highlighted in bold .Future steps GSM8K MATH500 HumanEval MBPP 
+
+0 70.44 30.24 35.46 40.24 
+
+50 74.26 34.89 32.61 39.45 
+
+100 78.42 33.78 40.22 42.75 
+
+200 78.14 35.48 46.45 48.92 Full 83.04 42.20 56.71 58.49 
+
+Table 2: Effect of the teacher horizon on Dream-7B-Instruct: the number of future trajectory steps averaged into the teacher target ¯pi (Eq. (6)). “Full” averages over the entire remaining masked trajectory (our default). Best in each column in bold .
+
+Trajectory mask threshold. The threshold τ controls how masked the chosen student step must be: only decoding steps whose masked fraction exceeds τ are eligible, so a small 
+
+τ scores the student on nearly finished states and a large 
+
+τ on almost-empty ones. Table 3 varies τ on Dream. A moderate τ = 0 .5 is best, with the highest average over the four tasks ( 60 .11 ) and the top score on every bench-mark except HumanEval. It surpasses both τ = 0 .25 (53 .63 
+
+average), which leaves too few masked positions to learn from, and τ = 0 .75 (59 .49 ), whose targets are too heavily masked to predict reliably. The gain holds both in domain (GSM8K, MATH500) and out of distribution (MBPP), with 
+
+τ = 0 .75 only marginally ahead on HumanEval. We use 
+
+τ = 0 .5 throughout. 
+
+Training without rollout verification. dOPSD uses the gold answer only to discard incorrect rollouts in Eq. (8); when no reference answer is available, it can instead distill from every rollout. Figure 4 ablates this on Dream. Even with-out verification, dOPSD still improves over the base model, raising its four-task average from 57 .59 to 58 .64 and gain-ing on GSM8K, MATH500, and HumanEval (for example MATH500 38 .97 → 40 .94 ), with only a small drop on MBPP. Verification adds a further boost, to a 60 .11 average, but it is not what makes the method work: the gains stem from the trajectory-derived privileged signal, which needs no answer 
+
+τ GSM8K MATH500 HumanEval MBPP Avg. 
+
+0.25 79.25 36.57 50.42 48.28 53.63 
+
+0.50 83.04 42.20 56.71 58.49 60.11 
+
+0.75 81.67 41.60 57.41 57.28 59.49 Table 3: Effect of the trajectory mask threshold τ on Dream-7B-Instruct. “Avg.” is the mean over the four benchmarks; 
+
+τ = 0 .5 (default) is best. Best in each column in bold .40 50 60 70 80    
+
+> Accuracy / Score
+> Base
+> w/o verify
+> dOPSD
+> 81.41
+> 81.88
+> 83.04
+> 38.97
+> 40.94
+> 42.20
+> 52.54
+> 55.48
+> 56.71
+> 57.43
+> 56.24
+> 58.49
+> GSM8K MATH500 HumanEval MBPP
+
+Figure 4: Effect of removing rollout verification on Dream-7B-Instruct. Distilling from all rollouts ( w/o verify , no refer-ence answer) still improves over the base model, while the verifier adds a further gain. supervision. dOPSD therefore applies even to datasets with-out reference answers, unlike the SFT and OPSD baselines, which require reference solutions. 
+
+## 5 Conclusion 
+
+We presented dOPSD, an on-policy self-distillation method that adapts the privileged-teacher principle of OPSD to diffu-sion language models. We first identified why the autoregres-sive recipe does not transfer: its PI is an external, instance-specific reference solution absent at inference, so OPSD col-lapses onto a weak PI-free consensus, and its random mask-ing lands off the model’s confidence-ordered decoding path. dOPSD resolves both issues by drawing the teacher’s priv-ilege and the student’s noise from one source, the student’s own denoising trajectory: the student is scored at a genuine intermediate step while the same model, as teacher, scores the same positions from later, more-decoded steps, an honest peek-ahead needing no reference solution. On Dream-7B-Instruct and LLaDA-8B-Instruct, dOPSD is the only method to improve the base model across the board, strengthening in-domain mathematical reasoning and, despite training only on mathematics, out-of-distribution code generation, while su-pervised, RL, and naive OPSD baselines stagnate or collapse. Ablations confirm the gains stem from the trajectory-derived signal itself and hold even without rollout verification, so dOPSD applies to datasets with no reference answers. We hope that casting the denoising trajectory as a source of PI offers a useful, label-efficient perspective for post-training diffusion language models. References 
+
+Agarwal, R.; Vieillard, N.; Zhou, Y.; Stanczyk, P.; Garea, S. R.; Geist, M.; and Bachem, O. 2024. On-Policy Distil-lation of Language Models: Learning from Self-Generated Mistakes. In International Conference on Learning Repre-sentations (ICLR) .Austin, J.; Johnson, D. D.; Ho, J.; Tarlow, D.; and van den Berg, R. 2021a. Structured Denoising Diffusion Models in Discrete State-Spaces. In Advances in Neural Information Processing Systems (NeurIPS) .Austin, J.; Odena, A.; Nye, M.; Bosma, M.; Michalewski, H.; Dohan, D.; Jiang, E.; Cai, C.; Terry, M.; Le, Q.; and Sutton, C. 2021b. Program Synthesis with Large Language Models. arXiv:2108.07732. Chen, M.; Tworek, J.; Jun, H.; Yuan, Q.; de Oliveira Pinto, H. P.; Kaplan, J.; Edwards, H.; Burda, Y.; Joseph, N.; Brock-man, G.; Ray, A.; Puri, R.; Krueger, G.; Petrov, M.; Khlaaf, H.; Sastry, G.; Mishkin, P.; Chan, B.; Gray, S.; Ryder, N.; Pavlov, M.; Power, A.; Kaiser, L.; Bavarian, M.; Winter, C.; Tillet, P.; Such, F. P.; Cummings, D.; Plappert, M.; Chantzis, F.; Barnes, E.; Herbert-Voss, A.; Guss, W. H.; Nichol, A.; Paino, A.; Tezak, N.; Tang, J.; Babuschkin, I.; Balaji, S.; Jain, S.; Saunders, W.; Hesse, C.; Carr, A. N.; Leike, J.; Achiam, J.; Misra, V.; Morikawa, E.; Radford, A.; Knight, M.; Brundage, M.; Murati, M.; Mayer, K.; Welinder, P.; Mc-Grew, B.; Amodei, D.; McCandlish, S.; Sutskever, I.; and Zaremba, W. 2021. Evaluating Large Language Models Trained on Code. arXiv:2107.03374. Cobbe, K.; Kosaraju, V.; Bavarian, M.; Chen, M.; Jun, H.; Kaiser, L.; Plappert, M.; Tworek, J.; Hilton, J.; Nakano, R.; Hesse, C.; and Schulman, J. 2021. Training Verifiers to Solve Math Word Problems. arXiv:2110.14168. Hendrycks, D.; Burns, C.; Kadavath, S.; Arora, A.; Basart, S.; Tang, E.; Song, D.; and Steinhardt, J. 2021. Measuring Mathematical Problem Solving With the MATH Dataset. In 
+
+Thirty-fifth Conference on Neural Information Processing Systems Datasets and Benchmarks Track (Round 2) .Hinton, G.; Vinyals, O.; and Dean, J. 2015. Distilling the Knowledge in a Neural Network. arXiv:1503.02531. Hu, E. J.; yelong shen; Wallis, P.; Allen-Zhu, Z.; Li, Y.; Wang, S.; Wang, L.; and Chen, W. 2022. LoRA: Low-Rank Adaptation of Large Language Models. In International Conference on Learning Representations .Lightman, H.; Kosaraju, V.; Burda, Y.; Edwards, H.; Baker, B.; Lee, T.; Leike, J.; Schulman, J.; Sutskever, I.; and Cobbe, K. 2023. Let’s Verify Step by Step. arXiv:2305.20050. Lou, A.; Meng, C.; and Ermon, S. 2023. Discrete Diffusion Modeling by Estimating the Ratios of the Data Distribution. arXiv:2310.16834. Lu, K.; and Thinking Machines Lab. 2025. On-Policy Distil-lation. Thinking Machines Lab: Connectionism. Accessed: 2026-06-25. Nie, S.; Zhu, F.; You, Z.; Zhang, X.; Ou, J.; Hu, J.; Zhou, J.; Lin, Y.; Wen, J.-R.; and Li, C. 2025. Large Language Diffusion Models. arXiv:2502.09992. Ou, J.; Han, J.; Xu, M.; Xu, S.; Xie, J.; Ermon, S.; Wu, Y.; and Li, C. 2025. Principled Reinforcement Learning for Dif-fusion LLMs Emerges from a Sequence-Level Perspective. arXiv:2512.03759. Ross, S.; Gordon, G.; and Bagnell, D. 2011. A Reduction of Imitation Learning and Structured Prediction to No-Regret Online Learning. In International Conference on Artificial Intelligence and Statistics (AISTATS) , 627–635. Sahoo, S. S.; Arriola, M.; Schiff, Y.; Gokaslan, A.; Marro-quin, E.; Chiu, J. T.; Rush, A.; and Kuleshov, V. 2024. Simple and Effective Masked Diffusion Language Models. In Ad-vances in Neural Information Processing Systems (NeurIPS) .Song, Y.; Zhang, Z.; Luo, C.; Gao, P.; Xia, F.; Luo, H.; Li, Z.; Yang, Y.; Yu, H.; Qu, X.; Fu, Y.; Su, J.; Zhang, G.; Huang, W.; Wang, M.; Yan, L.; Jia, X.; Liu, J.; Ma, W.-Y.; Zhang, Y.-Q.; Wu, Y.; and Zhou, H. 2025. Seed Diffusion: A Large-Scale Diffusion Language Model with High-Speed Inference. arXiv:2508.02193. Wei, J.; Wang, X.; Schuurmans, D.; Bosma, M.; Ichter, B.; Xia, F.; Chi, E. H.; Le, Q. V.; and Zhou, D. 2022. Chain-of-thought prompting elicits reasoning in large language models. In Proceedings of the 36th International Con-ference on Neural Information Processing Systems , NIPS ’22. Red Hook, NY, USA: Curran Associates Inc. ISBN 9781713871088. Wen, X.; Liu, Z.; Zheng, S.; Ye, S.; Wu, Z.; Wang, Y.; Xu, Z.; Liang, X.; Li, J.; Miao, Z.; Bian, J.; and Yang, M. 2025. Reinforcement Learning with Verifiable Rewards Implicitly Incentivizes Correct Reasoning in Base LLMs. arXiv:2506.14245. Yang, J.; Jiang, Y.; Hu, X.; Cheng, S.; Qi, B.; and Shao, J. 2026. DARE: Diffusion Large Language Models Alignment and Reinforcement Executor. arXiv:2604.04215. Ye, J.; Xie, Z.; Zheng, L.; Gao, J.; Wu, Z.; Jiang, X.; Li, Z.; and Kong, L. 2025. Dream 7B: Diffusion Large Language Models. arXiv:2508.15487. Ye, T.; Dong, L.; Wu, X.; Huang, S.; and Wei, F. 2026. On-Policy Context Distillation for Language Mod-els. arXiv:2602.12275. Yu, R.; Li, Q.; and Wang, X. 2025. Discrete diffusion in large language and multimodal models: A survey. arXiv preprint arXiv:2506.13759 .Zelikman, E.; Wu, Y.; Mu, J.; and Goodman, N. D. 2022. STaR: Bootstrapping Reasoning with Reasoning. In Ad-vances in Neural Information Processing Systems (NeurIPS) .Zhao, S.; Gupta, D.; Zheng, Q.; and Grover, A. 2025a. d1: Scaling Reasoning in Diffusion Large Language Models via Reinforcement Learning. arXiv:2504.12216. Zhao, S.; Liu, M.; Huang, J.; Xie, Z.; Pang, G.; and Grover, A. 2025b. Inpainting-Guided Policy Optimization for Diffusion Large Language Models. arXiv:2509.10396. Zhao, S.; Xie, Z.; Liu, M.; Huang, J.; Pang, G.; Chen, F.; and Grover, A. 2026. Self-Distilled Reasoner: On-Policy Self-Distillation for Large Language Models. arXiv:2601.18734. Zhu, S.; Ye, X.; Lu, H.; Shi, W.; and Liu, G. 2026. The Many Faces of On-Policy Distillation: Pitfalls, Mechanisms, and Fixes. arXiv:2605.11182. A Dataset Details 
+
+This appendix expands on the training corpus and evaluation benchmarks summarized in the Experimental Setup, includ-ing their sources, sizes, preprocessing, and scoring protocols. 
+
+A.1 Training Data 
+
+We post-train every method on MixChain-Z-PRM12K , a mathematical-reasoning corpus of roughly 12 K competition-style problems in the MATH/PRM800K (Lightman et al. 2023) lineage. Each problem is paired with a checkable ground-truth final answer and one or more chain-of-thought (CoT) solutions; the “mixed-chain” construction supplies so-lutions of varying reasoning length for the same problem, from terse derivations to fully elaborated step-by-step traces, which exposes the model to a range of solution granulari-ties rather than a single canonical style. The problems span the standard competition-mathematics topics, arithmetic and algebra, number theory, counting and probability, and geom-etry, at a spread of difficulty levels. Only two fields of each record are used by our method. The final answer feeds the rollout verifier of Eq. (8), which checks a completion by comparing its extracted answer against this gold value; the verification is answer-level and never exposes the reference CoT to the model. The reference CoT solu-tions are used only by the baselines that require them: SFT imitates them token by token, and OPSD (full-solution) con-ditions its teacher on the complete reference solution as PI. dOPSD itself consumes neither the reference CoT (its priv-ilege is trajectory-derived) nor, in the unverified variant of the ablation in Figure 4, the final answer. For all methods we format each problem with the same instruction-style prompt template used at evaluation, so that the training condition matches the inference condition the student is later scored under. Problems whose gold an-swer cannot be parsed into a checkable form are discarded. Prompts and completions are tokenized with each backbone’s native tokenizer and truncated to the model’s generation length; we use a completion budget of 256 tokens, match-ing the diffusion decoding length at which the models are evaluated. 
+
+A.2 Evaluation Benchmarks 
+
+We evaluate on four public benchmarks: two in-domain mathematical-reasoning sets and two out-of-distribution code-generation sets. None of them overlaps with the training corpus, and the code benchmarks in particular probe transfer to a domain never seen during post-training. Table 4 lists their sizes, domains, and scoring metrics. 
+
+GSM8K. GSM8K consists of grade-school arithmetic word problems that require multi-step numerical reasoning. We evaluate on its 1,319 -problem test split and score a com-pletion as correct when its extracted final answer exactly matches the gold value (Acc@1). 
+
+MATH500. MATH500 is the 500 -problem subset of the MATH benchmark of competition mathematics, spanning seven subjects and five difficulty levels. Answers are checked for mathematical equivalence to the reference (Acc@1), so Benchmark Domain #Test Metric 
+
+In-domain: mathematical reasoning 
+
+GSM8K Grade-school math 1,319 Acc@1 MATH500 Competition math 500 Acc@1 
+
+Out-of-distribution: code generation 
+
+HumanEval Python synthesis 164 pass@1 MBPP Python synthesis 500 pass@1 Table 4: Evaluation benchmarks. Math benchmarks are scored by final-answer accuracy (Acc@1); code benchmarks by functional correctness against the provided unit tests (pass@1). MBPP uses the sanitized test split. equivalent surface forms of the same value are counted as correct. 
+
+HumanEval. HumanEval contains 164 hand-written Python programming problems, each specified by a function signature, a natural-language docstring, and a set of hidden unit tests. A sample is correct if the generated function passes all of its tests; we report pass@1. 
+
+MBPP. MBPP (Mostly Basic Python Problems) comprises short, entry-level Python tasks, each with a prompt and a small suite of unit tests. We evaluate on the sanitized test split of 500 problems and report pass@1 under the same functional-correctness criterion as HumanEval. For all four benchmarks we decode with the same diffu-sion sampler and generation length used during training and greedily read out the final answer, so the reported numbers reflect single-sample accuracy rather than any best-of-n or self-consistency aggregation. 
+
+## B Hyperparameters for Inference 
+
+Table 5 lists the full decoding configuration used for every evaluation, separately for each backbone and benchmark. All numbers in the paper use single-sample decoding, so the math benchmarks report Acc@1 and the code benchmarks pass@1; no best-of-n or self-consistency is used. Two invariants hold across all runs. First, the number of diffusion steps is set equal to the number of generated tokens on both backbones: letting the sampler commit more than one token per step degrades quality sharply, so we decode a single token per step. Second, the generation length is chosen per benchmark to comfortably cover the reference solutions while staying within each model’s position limit, which is why code generation, with its longer completions, uses more tokens than the math benchmarks. 
+
+Dream-7B-Instruct. Dream decodes with confidence-based (entropy) remasking at a low temperature of 0.1 and nucleus sampling with top-p = 0 .9, without top-k trunca-tion. For code generation on HumanEval we additionally enable entropy-threshold parallel decoding (threshold 0.5)for efficiency; all other Dream runs use the plain entropy sampler. Hyperparameter GSM8K MATH500 HumanEval MBPP 
+
+Dream-7B-Instruct 
+
+Max new tokens 256 512 768 1024 
+
+Diffusion steps 256 512 768 1024 
+
+Temperature 0.1 0.1 0.1 0.1
+
+Top-p 0.9 0.9 0.9 0.9
+
+Top-k – – – –
+
+LLaDA-8B-Instruct 
+
+Max new tokens 256 512 512 256 
+
+Diffusion steps 256 512 512 256 
+
+Block length 8 64 512 256 
+
+Temperature 0.0 0.0 0.0 0.0
+
+Top-p 0.9 0.9 0.9 0.9
+
+Top-k – – – –Table 5: Inference hyperparameters across base models and benchmarks. “–” indicates the hyperparameter is not applicable or not used. On both backbones the number of diffusion steps equals the number of generated tokens. For LLaDA, temperature is 
+
+0 (greedy) and top-p is informational only, as its Gumbel-argmax sampling ignores nucleus truncation. 
+
+LLaDA-8B-Instruct. LLaDA decodes with its native low-confidence remasking at temperature 0 (greedy). Because its Gumbel-argmax sampling is insensitive to nucleus trunca-tion, the listed top-p = 0 .9 is informational only and does not affect the output. LLaDA additionally denoises in semi-autoregressive blocks ; we set the block length per bench-mark following the model’s recommended settings, from a fine block of 8 on GSM8K to a single full-length block on HumanEval. 
+
+## C Qualitative Examples 
+
+To make the baselines’ failure modes concrete, we show every method’s generation on three representative GSM8K prob-lems (Dream-7B-Instruct). Each problem isolates a distinct error that the baselines share but dOPSD avoids. Through-out, highlighting marks the pivotal correct and erroneous steps. 
+
+C.1 Example 1: Problem 526 
+
+The problem states a daily consumption directly, so no hour-to-day conversion is needed. Nonetheless, every baseline hal-lucinates a spurious “ ×24 hours” step, and several also sub-tract the two bills in the wrong direction; the errors compound into wildly off answers. dOPSD is the only method that reads the units correctly and reaches the gold answer of 21 .
+
+Problem Gold answer: 21 
+
+Ada’s daily electric consumption is 12 kilowatts per hour. She is planning to add a device that will consume 2 kilowatts per hour a day. If a kilowatt per hour is $1.50, how much is the difference between Ada’s weekly electric bill before and after she adds the new device? 
+
+dOPSD Predicted: 21 ✓
+
+Ada’s daily electric consumption is 12 kilowatts per hour ×
+
+$1.50 = $18 per day . Her weekly bill is $18 × 7 days = $126. 
+
+Adding the new device, her daily consumption is 12 + 2 = 14 
+
+kilowatts per hour, so her weekly bill is 14 × $1.50 × 7 days = $147. The difference is $147 − $126 = $21 . The answer: 21. 
+
+Base model Predicted: 504 ×
+
+Ada’s daily electric consumption is 12 kilowatts per hour 
+
+× 24 hours = 288 kilowatts per day. Her daily bill is 288 
+
+× $1.50 = $432, so her weekly bill is $432 × 7 = $3024. The new device consumes 2 × 24 = 48 kilowatts per day, giving 
+
+288 + 48 = 336 kilowatts per day, $504 per day, $3528 per week. The difference is $3528 − $3024 = $504. 
+
+SFT Predicted: 2520 ×
+
+Ada’s daily consumption is 12 × 24 hours = 288 kilowatts per day, $432 per day, $3024 per week. The new device con-sumes 2 × 24 = 48 kilowatts per day, $72 per day, $504 per week. The difference is $3024 − $504 = $2520. The answer: 2520. 
+
+GRPO Predicted: 2877 ×
+
+Ada’s daily consumption is 12 × 24 hours = 288 kilowatts per day, $432 per day, $3024 per week. Then her daily con-sumption is 12 + 2 = 14 kilowatts per hour, $21 per day, $147 per week. The difference is $3024 − $147 = $2877. 
+
+The answer: 2877. 
+
+OPSD (answer-only) Predicted: 504 ×
+
+Ada’s daily consumption is 12 × 24 hours = 288 kilowatts per day, $432 per day, $3024 per week. The new device con-sumes 2 × 24 = 48 kilowatts per day, giving 336 kilowatts per day, $504 per day, $3528 per week. The difference is $3528 
+
+− $3024 = $504. (Identical hallucinated conversion as the base model.) 
+
+OPSD (full-solution) Predicted: none ×
+
+Ada’s daily consumption is 12 × 24 = 288 kilowatts per day. After adding the device, 288 + 2 = 290 kilowatts per day. The weekly bills are 288 × 1.50 = $432 and 290 × 1.50 = $435 ,so the difference is $435 − $432 = $. . . (the verbose generation exceeds the budget and terminates without a final answer). 
+
+Only dOPSD avoids the spurious hourly conver-sion: its trajectory-derived teacher keeps the student on unit-consistent reasoning, whereas every supervised, reinforcement-learning, and PI-conditioned baseline inherits or amplifies the ×24 error, and the richest-privilege vari-ant (full-solution) additionally rambles into an unfinished, malformed answer. 
+
+C.2 Example 2: Problem 589 
+
+Here one option makes Martin lose weight and the other makes him gain weight, so the two outcomes lie on opposite sides of his starting weight. The correct gap therefore treats the Cheerios option as −6.25 and the donut option as +8 .75 ,giving 8.75 −(−6.25) = 15 . Every baseline instead subtracts the two magnitudes, 8.75 − 6.25 = 2 .5, silently dropping the sign; dOPSD alone recognizes that a loss and a gain add up and returns the gold answer 15 .
+
+Problem Gold answer: 15 
+
+If Martin eats Cheerios every day for breakfast, he’ll lose 1.25 pounds/week. If he eats donuts every day for breakfast, he’ll gain 1.75 pounds/week. What will be the difference in his weight at the end of 5 weeks between the two breakfast options? 
+
+dOPSD Predicted: 15 ✓
+
+If Martin eats Cheerios, he’ll lose 1.25 pounds/week × 5 weeks = 6.25 pounds. If he eats donuts, he’ll gain 1.75 pounds/week 
+
+× 5 weeks = 8.75 pounds. Because one option is a loss and the other a gain, the difference at the end of 5 weeks is 15 pounds . 
+
+The answer is 15. 
+
+Base model Predicted: 2.5 ×
+
+If Martin eats Cheerios, he’ll lose 1.25 pounds/week × 5weeks = 6.25 pounds. If he eats donuts, he’ll gain 1.75 pounds/week × 5 weeks = 8.75 pounds. The difference is 8.75 − 6.25 = 2.5 pounds . The answer is 2.5. 
+
+SFT Predicted: 2.5 ×
+
+Over 5 weeks the Cheerios option loses 1.25 × 5 =6.25 pounds and the donut option gains 1.75 × 5 =8.75 pounds. The difference between the two options is 8.75 − 6.25 = 2.5 pounds . The answer: 2.5. 
+
+GRPO Predicted: 2.5 ×
+
+After 5 weeks Martin has lost 1.25 × 5 = 6 .25 pounds on Cheerios and gained 1.75 × 5 = 8 .75 pounds on donuts. The difference at the end of 5 weeks is 8.75 − 6.25 = 2.5 pounds . 
+
+The answer: 2.5. 
+
+OPSD (answer-only) Predicted: 2.5 ×
+
+Over 5 weeks the Cheerios option loses 6.25 pounds and the donut option gains 8.75 pounds. The difference is 8.75 − 6.25 = 2.5 pounds ; the model then restates the same value verbatim. The answer is: 2.5. 
+
+OPSD (full-solution) Predicted: none ×
+
+Empty response: the model generated no text at all (raw output 
+
+[’ ’] ). 
+
+C.3 Example 3: Problem 780 
+
+The question asks for the difference between two scores, which is a magnitude. Every method computes the signed gap correctly ( 80+15 −120 = −25 , i.e. Ava scores 25 below Emma), but only dOPSD reports it as the positive magnitude 
+
+25 ; the baselines box the raw signed value −25 , discard it while second-guessing the unknown absolute scores, or collapse to 0.
+
+Problem Gold answer: 25 
+
+Ava and Emma want to know who is better at a new video game. They each play one level; the higher score wins. They receive 10 points per enemy jumped on, 5 points per berry collected, and 30 points for every second left on the timer. If Ava jumps on 8 more enemies than Emma and collects 3 more berries, but finishes the level 4 seconds slower, what is the difference between their two scores? 
+
+dOPSD Predicted: 25 ✓
+
+Ava gains 8 × 10 = 80 (enemies) and 3 × 5 = 15 (berries) but loses 4×30 = 120 (timer), so the signed gap is 80+15 −120 = 
+
+−25 . Since it is negative, Ava’s score is lower than Emma’s, and the difference between their scores is 25 points . 25 
+
+Base model Predicted: -25 ×
+
+Ava gains 80 (enemies) and 15 (berries) but loses 120 (timer): 
+
+80 + 15 − 120 = −25 . The difference between their scores is reported as the signed value −25 .
+
+SFT Predicted: -25 ×
+
+Computes Ava’s net as 80 + 15 − 120 = −25 , then reasons that Emma’s absolute score is unknown, so the difference “can-not be found,” expressing it as −25 less than Emma’s score. The answer is: −25 .GRPO Predicted: 0 ×                      
+
+> Computes Ava’s net as 80 + 15 −120 = −25 , introduces an unknown Emma score x, writes the difference as x−(−25) =
+> x+ 25 , then, unable to determine x, collapses to 0.
+> OPSD (answer-only) Predicted: -25 ×
+> Same computation, 80 + 15 −120 = −25 , reported as the signed value −25 .
+> OPSD (full-solution) Predicted: none ×
+> Empty response: the model generated no text at all (raw output
+> [’ ’] ).
+
+Across all three examples the pattern is the same: the base-lines make a single, confident slip, a hallucinated unit conver-sion, a dropped sign, or a mis-reported signed difference, that the final answer inherits, while the full-solution teacher de-grades into malformed or empty generations. dOPSD, draw-ing its teacher signal from the model’s own decoding trajec-tory rather than an external solution, is the only method that keeps the reasoning faithful and lands on the gold answer in every case.

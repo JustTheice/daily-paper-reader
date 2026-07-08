@@ -1,0 +1,1253 @@
+Title: Low Perplexity is Repetition: A One-Dimensional Self-Conditioning Attractor in Continuous Diffusion LMs
+
+URL Source: https://arxiv.org/pdf/2607.00588v1
+
+Published Time: Thu, 02 Jul 2026 00:41:45 GMT
+
+Number of Pages: 25
+
+Markdown Content:
+Preprint 
+
+# LOW PERPLEXITY IS REPETITION : A ONE -DIMENSIONAL SELF -C ONDITIONING ATTRACTOR IN CONTINUOUS DIFFUSION LM S
+
+Shuai Zhang 1,2, Zijie Chen 2, Hongliang He 2, Lun Du 3,†, Zhenzhong Lan 2,†
+
+> 1
+
+Zhejiang University 2Westlake University 3Ant Group 
+
+zhangshuai@westlake.edu.cn lanzhenzhong@westlake.edu.cn 
+
+> †
+
+Corresponding authors 
+
+# ABSTRACT 
+
+Continuous diffusion language models such as ELF report record-low generative perplexity (Gen-PPL). We find a catch: these models repeat far more than human text, and Gen-PPL rewards rather than penalizes that repetition, so its low scores overstate quality. Strip the repetition and ELF-B’s Gen-PPL rises from 19 .5 to 
+
+27 .7; the smallest model even posts the best Gen-PPL because it repeats most. We trace the repetition to its source: a contractive attractor along a single direction in the self-conditioning feedback loop, the loop that feeds each step’s clean estimate into the next. Because the failure is one-dimensional, a one-dimensional fix suf-fices, and we propose one. ACE (Attractor-Contrast-Escape) subtracts that single, label-free direction from the feedback at each step. Estimated once on the 105 Mmodel, the direction cuts repetition to near the human level while keeping qual-ity competitive, and transfers near-unchanged to the 342 M and 652 M models and across samplers; the same recipe recovers useful directions on other architectures. Since Gen-PPL itself rewards repetition, we instead measure the compute each fix needs to produce human-clean text, where ACE is 1.5–5× cheaper. 
+
+# 1 INTRODUCTION 
+
+Continuous diffusion language models (DLMs) are a promising non-autoregressive route to text generation: they denoise a whole sequence in parallel within a differentiable embedding space, steerable by gradients and guidance. Self-conditioning (Chen et al., 2022) improves their sample quality by feeding the model’s own clean estimate back into each step to refine the next. Recent models such as ELF (Hu et al., 2026) report low generative perplexity (Gen-PPL), the number the field reads as generation quality. We find that this headline hides a defect: ELF’s samples repeat far more than human text, and Gen-PPL rewards the repetition instead of penalizing it. Strip the repetition and ELF-B’s Gen-PPL rises from 19 .5 to 27 .7, enough for the larger ELF-M to overtake it; the smallest model posts the best Gen-PPL only because it repeats the most (Table 1). The defect is heavy and systematic. A large share of ELF samples lock onto a few repeated 4-grams and loop them for hundreds of words (Table 17), which human text essentially never does. The link is not only across models but within one: at a fixed setting, sample-level repetition correlates with the GPT-2 (Radford et al., 2019) PPL the samples are scored by (Table 16). The defect stays hidden because the certifying metric is blind to it: repeated text is highly probable under the scorer, so it earns a flatteringly low Gen-PPL, analogous to likelihood-based degeneration in autoregressive generation (Holtzman et al., 2020; Welleck et al., 2020). We trace the defect to its mechanism rather than stop at the symptom. Like audio feedback, this self-conditioning loop settles on whatever is most self-predictable, which is repeated content. Two probes pin this down. Turning the feedback strength up, with nothing else changed, drives rep-etition up and Gen-PPL down together (§3): the loop creates the repetition the metric then re-wards. And linearizing the loop, its Jacobian has a single slowest-contracting mode, so the re-peated state is a one-dimensional contractive attractor along one direction d (Fig. 1; §4), a basin 1
+
+> arXiv:2607.00588v1 [cs.CL] 1 Jul 2026
+
+Preprint 2 1 0 1 2 3 4  
+
+> uprojection onto d
+> Perpendicular component
+> 3%
+> 6%
+> 9%
+> 12%
+> 15%
+> Human bar 1.9%
+
+Figure 1: Repetition is a basin; ACE escapes it. Even as ELF denoises toward a clean sample, self-conditioning drags its representation u along one direction d (the high- minus low-repetition gap) into a repetition state u⋆; the baseline slides into this basin (red), while ACE subtracts d to hold u in the human-clean zone (blue). Background: measured repetition rate. that sharper sampling only deepens. This is specific to self-conditioned continuous DLMs (ELF, Plaid (Gulrajani & Hashimoto, 2023)), and its one-dimensional geometry is exactly what makes a one-dimensional fix possible. Because the attractor is one-dimensional, one direction is enough to escape it. ACE (Attractor-Contrast-Escape) 1 subtracts that single direction d from the fed-back estimate at every step. The direction is recovered label-free, as the difference of means of the feedback between trajectories trapped in the basin (top-repetition tertile) and those that stay free (bottom tertile): no per-token labels, no auxiliary model, no retraining. Crucially ACE acts where the defect is born, on the self-conditioning feedback rather than at token selection, because repetition is set in the continuous latent, upstream of that selection, so decode-time fixes are poorly placed to reach it. A single frozen direction, estimated once on the smallest model within a closed-form usable window (§4), cuts rep-etition to near the human level at competitive quality and transfers near-unchanged across inference knobs and model sizes (cosine 0.82 –0.96 to the per-config re-estimate); the same recipe recovers useful directions on other architectures (Plaid, LangFlow (Chen et al., 2026)). Evaluating the fix needs care, since Gen-PPL is fooled by the very repetition ACE removes. We therefore accept text under a human repetition bar, read quality on the accepted set with standard reference-free metrics (§3), and measure the compute needed to reach genuinely non-repetitive text (§5); under this evaluation ACE makes human-clean text 1.5–5× cheaper at competitive quality. 
+
+Contributions. 
+
+1. Gen-PPL rewards repetition. Continuous DLMs repeat far more than human text; we show that Gen-PPL, the field’s headline metric, rewards rather than penalizes this and even reverses the model ranking, and we propose a defect-controlled evaluation that accepts text under a human-repetition bar and scores compute-to-clean instead of Gen-PPL (§3, §5). 2. Its mechanism: an effectively one-dimensional attractor. By direct ablation and a linear-stability analysis we trace the repetition to an effectively one-dimensional contractive attractor of the self-conditioning loop along one direction d (§4). 3. Its fix: one frozen direction (ACE). A single cheap, label-free, frozen direction, applied within a closed-form usable steering window, removes most repetition and transfers across knobs and  
+
+> 1Code: https://github.com/ZhangShuai1230/ACE-DLM
+
+2Preprint scales, with the same recipe recovering useful directions on other architectures; under our eval-uation it reaches human-clean text at comparable quality and 1.5–5× lower cost (§5, §6). 
+
+Relation to prior work. Prior work exposes metric pathologies in (diffusion-)LM evalua-tion (Zheng et al., 2025; Wang et al., 2022; Franca & Tong, 2026) or studies discretization and decoding bottlenecks (Li et al., 2022; Dieleman et al., 2022); autoregressive-degeneration work studies repetition along token-time (Holtzman et al., 2020; Welleck et al., 2020); and steering work shows low-dimensional interventions can control diffusion-LM behavior (Shnaidman et al., 2025). We connect these lines: we surface a text-visible repetition defect in self-conditioned continu-ous DLMs, trace it to the self-conditioning feedback loop, and remove it with a single label-free feedback-direction intervention (full discussion in App. H). 
+
+# 2 BACKGROUND AND METRICS 
+
+2.1 ELF, SELF -CONDITIONING , AND THE TWO SAMPLERS 
+
+ELF (Hu et al., 2026) is a continuous-embedding flow-matching language model. Generation starts from Gaussian noise z0 and follows a trajectory t ∈ [0 , 1] from noise ( t=0 ) to the clean text embed-ding ( t=1 ), which is read out to token ids by an independent per-position arg max . Two samplers are used: ODE (deterministic Euler integration) and SDE (Euler steps interleaved with partial noise re-injection, governed by the sampler’s rate parameter γ, which we call the churn after the analogous stochastic-sampler knob of Karras et al. (2022)). Self-conditioning (Chen et al., 2022) is a refinement trick for diffusion sampling: instead of predict-ing the clean data ˆx from the noised input alone, each step feeds back its previous estimate as an extra input and refines it. It adds no extra forward pass, improves sample quality, and is widely used in continuous DLMs (ELF, Plaid (Gulrajani & Hashimoto, 2023), LangFlow (Chen et al., 2026)). Formally it turns the denoiser into a recurrence driven toward a fixed point, the view our analysis builds on (§4). ELF reuses this same channel to distill classifier-free guidance: instead of two forward passes per step, it feeds the previous estimate ˆxprev back together with a scalar SC-CFG scale w, and a single pass produces the guided velocity. At each step i,
+
+vi = fθ
+
+ zi, t i, w, ˆxprev 
+
+, ˆxprev ← ˆxi. (1) This loop propagates the model’s commitment across later steps and is central to the repetition defect. 2.2 THE REPORTED METRICS 
+
+Generative perplexity (Gen-PPL) under GPT-2 Large is the standard metric for unconditional DLM evaluation. For a generated text x=( x1, . . . , x N ),PPL (x) = exp 
+
+
+
+− 1
+
+> N
+
+PNi=1 log pGPT-2 (xi | x<i )
+
+
+
+, (2) aggregated at corpus level. Unigram entropy is reported as a check against trivial collapse. Crucially, no n-gram repetition metric is reported in the original ELF paper or in most DLM benchmarks: the gap this paper fills. 2.3 THE REPETITION METRIC 
+
+We use the standard 4-gram self-repetition rate, the fraction of 4-gram occurrences in a text that duplicate an earlier one: 
+
+> REP 4
+
+(x) = 
+
+P 
+
+> g∈G
+
+max( cx(g) − 1, 0) 
+
+|G| , (3) with G the multiset of 4-grams and cx(g) its counts. This is identical to seq-rep-4 (Welleck et al., 2020) (the same duplicate n-gram family, complementary to diversity metrics (Su et al., 2022; Li et al., 2016)); we tokenize by whitespace and report the median over samples, with the human-clean acceptance threshold calibrated to human text rather than an arbitrary constant (§3). 3Preprint Table 1: Gen-PPL ranks ELF backwards by rewarding repetition; one shared direction re-moves it at competitive quality. Per-size baseline vs steered ( 64 steps, λ=2 ): defect metrics on the full 1000 -sample pool (left) and quality on the clean accepted set, length-matched (right). G-PPL/c-PPL: Gen-/clean-PPL; s-BLEU: self-BLEU. 4                                                                             
+
+> defect: full 1000 -pool quality: clean accepted set, length-matched
+> Model rep % ↓accept ↑G-PPL ↓c-PPL ↓CoLA ↑dist-1↑dist-3↑s-BLEU ↓
+> ELF-B ( 105 M) base 6.83 0.07 19 .527 .70.90 0.53 0.97 0.09
+> steer 2.11 0.45 27 .430 .60.90 0.53 0.97 0.15
+> ELF-M ( 342 M) base 1.89 0.51 22 .125 .40.92 0.55 0.97 0.07
+> steer 0.67 0.88 25 .526 .10.92 0.56 0.98 0.10
+> ELF-L ( 652 M) base 1.66 0.56 24 .026 .20.91 0.56 0.98 0.07
+> steer 0.71 0.84 27 .128 .50.91 0.58 0.98 0.10
+> Human (BBC) 0.00 0.95 13 .814 .40.89 0.61 0.99 0.05
+
+# 3 THE REPETITION DEFECT : G EN -PPL RANKS ELF BACKWARDS 
+
+ELF’s record-low generative perplexity comes largely from repetition that the metric rewards rather than penalizes. We study the ELF series (Hu et al., 2026) of unconditional OpenWebText (Gokaslan & Cohen, 2019) models at the 64 -step, γ=1 .0 operating point (SC-CFG w=3 ), measuring the defect metric of §2 over n=1000 samples per model against n=1000 human (BBC/XSum (Narayan et al., 2018)) articles (Table 1). No authoritative per-sample cutoff for “degenerate” exists, so we calibrate to these: their seq-rep-4 has median 0.00% and 95 th percentile 1.92% , the human-clean bar. 2
+
+A sample is human-clean when its seq-rep-4 is under this bar, and we read two quantities off it: the accept rate (the share of samples below it) and clean-PPL (the Gen-PPL of the accepted sam-ples alone, so repetition can no longer lower it). Clean-PPL is a guardrail against passing the bar with diverse nonsense, not the quality verdict, which rests on the reference-free signals in Table 1 (grammatical acceptability and within-text diversity). 
+
+The defect, and the backwards ranking. ELF’s output carries a defect absent from human text yet invisible to the metrics certifying it: heavy 4-gram self-repetition, common in ELF and near-absent in human prose (Table 1; Welleck et al., 2020). The ranking it produces runs backwards :Gen-PPL places the smaller ELF-B above the larger ELF-M, yet our defect-controlled clean-PPL reverses them. Strip the repetition and ELF-M is the better model; ELF-B led only because it repeats most: repeated text is trivially predictable, so the GPT-2 scorer assigns it high probability and a flatteringly low Gen-PPL. This is not a measurement artifact (controls in App. F); a side-by-side example of the defect and the fix is in App. G (Table 17). 
+
+Self-conditioning creates the repetition that Gen-PPL rewards. Feeding back an attenuated 
+
+estimate α ˆx and turning α from 0 (feedback off) up to 1 (full), with nothing else changed, 5 drives repetition up and Gen-PPL down together: the metric calls the generator more than four times “better” just as it grows most repetitive (Table 2). Acceptance under the human bar collapses as α
+
+rises: the Gen-PPL gain is part real fluency and part rewarded repetition, which the metric cannot tell apart. 
+
+# 4 MECHANISM : REPETITION IS A ONE -DIMENSIONAL ATTRACTOR OF THE SELF -CONDITIONING LOOP 
+
+The ablation of §3 identifies the self-conditioning feedback as a causal driver of repetition; we next ask whether that effect is diffuse or concentrated: does the loop’s drift lie along one identifiable          
+
+> 2A generous bar; the few percent of human text above it is genuinely repetitive (lists, names, refrains).
+> 4We fix 64 steps across sizes; ours then matches ELF’s reported 64 -step ELF-M/L (Gen-PPL 22 .1/24 .0vs.
+> 21 .7/23 .3), while ELF reports ELF-B at 32 steps ( 24 .1;https://github.com/lillian039/ELF ).
+> 5No retraining: classifier-free guidance already trains the model both with the self-conditioning signal (α=1 ) and without it ( α=0 ), so the sweep only interpolates between regimes it already runs.
+
+4Preprint Table 2: Raising the self-conditioning strength α increases repetition and lowers Gen-PPL together. Feeding back α ˆx, no retraining (ELF-B, 64 steps, γ=1 .0); accept: share under the 1.92% 
+
+human bar. Gen-PPL: all samples; clean-PPL: accepted subset only.                                    
+
+> α(SC strength) 0.0(off) 0.30.50.70.91.0(full) rep median % 0.00 0.50 1.95 4.57 6.44 6.83
+> accept 1.00 0.94 0.49 0.18 0.09 0.07
+> Gen-PPL ↓97 .548 .329 .621 .719 .619 .5
+> clean-PPL ↓97 .549 .334 .029 .227 .627 .7
+
+direction that predicts a sample’s repetition and, when subtracted, suppresses it? We find that it does: repetition is a contracting attractor of the self-conditioning loop that amplifies the most self-predictable signal, repeated content, and is drawn toward a repetition fixed point u⋆ (Fig. 1). An idealized linear model of this attractor predicts the failure is one-dimensional , repetition living on one slow mode v1 separable from the benign denoising that writes the text; we then test each pre-diction against measurement (the formal statements, and the idealizing assumptions they rest on, are in App. A). The cheap direction d that exploits it is §5; its transfer across knobs and sizes is §6. 
+
+The loop splits into a self-conditioning response and a denoising drive. ELF denoises by self-conditioning : each step k feeds the model its own previous clean-latent estimate ˆxk ∈ RL×e and reads off the next; iterating this feedback is the loop (Chen et al., 2022). We track its position pool (e the embedding dimension, L the length), 
+
+uk = 1
+
+> L
+
+PLl=1 ˆxk[l] ∈ Re, uk+1 = g(uk) = s(uk)
+
+| {z } 
+
+> self-conditioning
+
++ fk
+
+|{z} 
+
+> denoising drive
+
+. (4) One step g splits in two: the self-conditioning response s(uk), how the next estimate depends on the fed-back one (the channel by which repeated content reinforces itself), and the denoising drive 
+
+fk, the ordinary denoising the step would do with the feedback off (set by the noise level tk and latent zk), which carries the bulk of the motion and writes the text. Repetition is governed mainly by s, with only the small on-axis component of fk setting the driven offset; fk is otherwise the benign carrier it rides on. App. A derives the split from the model’s clean-latent prediction Xθ (the fed-back ˆx of §2) by a first-order expansion, pooling the feedback over positions into a tractable 
+
+e-dimensional state whose link to text-level repetition is empirical (Fig. 2a). 
+
+Assumption 1 (Repetition attractor) . The self-conditioning map s has a fixed point u⋆ (repeated content) and is C1 near it with a contracting Jacobian J = D s(u⋆). For the analysis we idealize 
+
+J as symmetric, with orthonormal eigenvectors {vi} and real eigenvalues 1 > μ 1 ≥ μ2 ≥ · · · ≥ 0.The leading eigenvector v1 is the repetition axis , and ρ := 1 − μ1 ∈ (0 , 1) its contraction rate. 
+
+The symmetry idealization is used only to decouple the v1 coordinate into the scalar recursion below; the measured finite-difference J is only approximately symmetric (App. B), so the theory reads as a local scalar approximation. The axis v1 is slowest only relative to the faster off-axis modes, not near-marginal (measured μ1≈0.15 ). 
+
+Repetition is one-dimensional. Linearizing s about u⋆, its response contracts fastest off, slowest along, the leading eigenvector v1, so the per-step change decomposes as 
+
+∆uk ≈ βk v1
+
+> leading
+
++ rk
+
+> decays
+
+| {z }
+
+> repetition mode
+
++ fk
+
+|{z} 
+
+> denoising drive
+
+(5) (Lemmas 1–2, App. A): the repetition mode βkv1 along the axis (coefficient βk = −ρ a (1)  
+
+> k
+
+, with 
+
+a(1)  
+
+> k
+
+= ⟨uk − u⋆, v1⟩ the repetition level , how far the feedback sits along v1), the subordinate off-axis modes rk ⊥ v1 (the same self-conditioning response on the faster-contracting directions), and the near-orthogonal drive fk. Because v1 contracts the slowest (spectral gap μ1/μ 2), the off-axis transients in rk die out faster than the v1 component, so the structured residual concentrates on v1:5Preprint 2 1 0       
+
+> Feedback projection onto v1
+> 0
+> 10
+> 20
+> 30
+> Repetition (%)
+> r= 0.65
+> (a) Deeper along v1more repetition
+> Human 1.92%
+> 0.5 0.6 0.7 0.8
+> Trajectory fraction
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> Spectral gap  1/ 2
+> (b) Attractor mode emerges
+> 0
+> 5
+> 10
+> 15
+> 20
+> Repetition (%)
+> 0.40
+> 0.45
+> 0.50
+> 0.55
+> |cos( v1, d)|
+
+Figure 2: Repetition concentrates on one dominant mode v1, with which the cheap d partially aligns. (a) mean feedback projection onto the repetition axis v1 (the leading Jacobian eigenvector, read once the basin has formed, at trajectory fraction ∼0.85 ) vs final repetition. (b) as the basin forms a dominant mode emerges ( μ1/μ 2); the cheap d partially aligns with this local Jacobian mode while integrating basin-entry drift over the trajectory (Tab. 10). repetition is effectively one-dimensional along this axis. Freezing the drive ( fk ≡ f ), the repetition level settles at 
+
+u∞ = u⋆ + ( I − J)−1f (6) (Lemma 3, App. A): the distance |a(1)  
+
+> ∞
+
+| = |f (1) |/ρ along the axis is the driven offset, the small drive component f (1) = ⟨f , v1⟩ divided by the contraction rate ρ, largest along v1 since v1 has the smallest 1 − μi; the faster off-axis modes settle at smaller offsets. 
+
+The repetition axis is real and dominant. The measured loop bears this out. As the basin forms the spectral gap μ1/μ 2 rises, v1 becoming the clearly dominant mode (Fig. 2b, Tab. 10); a sample’s repetition level a(1) predicts its final repetition (Fig. 2a); and the cheap difference-of-means d (§5) aligns with v1, the overlap |cos( v1, d)| climbing to 0.55 as the basin forms (Fig. 2b). Here d need not equal the single-point eigenvector v1: it is a trajectory-averaged steering direction that partially aligns with v1 yet steers better (Tab. 5) by integrating the basin-entry drift over the whole trajectory. Repetition concentrates on this one mode: the defect is effectively one-dimensional. We obtain v1
+
+and the spectral gap from the feedback Jacobian (Alg. 2). 
+
+# 5 ACE: ONE SUBTRACTED DIRECTION ESCAPES THE ATTRACTOR 
+
+The mechanism is prescriptive (§4): if repetition is a single direction in the fed-back estimate, sub-tract only that direction and keep the rest. We call this ACE (Attractor-Contrast-Escape ): Contrast 
+
+the average self-conditioning feedback of repetitive vs. non-repetitive trajectories to get the attrac-tor direction d (a difference of means, in the spirit of activation steering), then Escape by steering against it. This is principled, not heuristic: from just two class means, d recovers the mechanism’s mode v1 under an idealized separability model (Prop. 1, App. A) and empirically aligns with the measured dominant mode. Algorithm 1 instantiates it. 5.1 MAIN RESULTS : REPETITION AND QUALITY 
+
+One frozen direction cuts repetition at competitive quality. At the operating point λ=2 (the cross-size result, Tab. 1; full dose sweep Tab. 14), steering cuts median repetition to near the human level at competitive clean-PPL, with reference-free quality preserved (grammaticality and within-text diversity): the targeted subtraction keeps the rest of the feedback intact. That a single 
+
+difference-of-means direction recovers most of the gap is direct evidence the repetition signal is one-dimensional and separable from coherence. Steering is one causal intervention on d (at inference, Fig. 3); a training-time intervention confirms it: an anti-attractor regularizer on the d-component of the feedback lowers plain repetition from 6.8% to 3.3% at a small clean-PPL cost ( 27 .9→29 .1 vs. 6Preprint 
+
+Algorithm 1 Difference-of-means self-conditioning steering (ACE) 
+
+Require: full-SC sampler G, count N (estimation); model fθ , direction d, strength λ, steps T
+
+(generation) 
+
+Ensure: attractor direction d; one steered sample  
+
+> 1:
+
+procedure ESTIMATE DIRECTION (G, N ) 
+
+> 2:
+
+for n = 1 , . . . , N do  
+
+> 3:
+
+sn ← 1
+
+> T
+
+PTk=1 1
+
+> L
+
+PLl=1 ˆx(n) 
+
+> k
+
+[l] ▷ mean self-conditioning feedback  
+
+> 4:
+
+rn ← REP 4(DEC (zn)) ▷ final repetition  
+
+> 5:
+
+end for  
+
+> 6:
+
+T ← { n : rn ≥ q2/3(r) } ▷ trapped: top-rep tertile  
+
+> 7:
+
+F ← { n : rn ≤ q1/3(r) } ▷ free: bottom-rep tertile  
+
+> 8:
+
+d ← 1
+
+> |T |
+
+P 
+
+> n∈T
+
+sn − 1
+
+> |F|
+
+P 
+
+> n∈F
+
+sn 
+
+> 9:
+
+return d/∥d∥ 
+
+> 10:
+
+end procedure  
+
+> 11:
+
+procedure STEERED GENERATE (fθ , d, λ, T ) 
+
+> 12:
+
+z0 ∼ N (0 , σ 2I) 
+
+> 13:
+
+ˆx0 ← 0 
+
+> 14:
+
+for k = 1 , . . . , T do  
+
+> 15:
+
+(zk, ˆxk) ← STEP (fθ , zk−1, t k, ˜xk−1) 
+
+> 16:
+
+˜xk ← ˆxk − λ d 1⊤ 
+
+> L
+
+▷ ⋆ subtract along d, broadcast over L positions  
+
+> 17:
+
+end for  
+
+> 18:
+
+return arg max v DEC (zT )[ ·, v ] 
+
+> 19:
+
+end procedure 
+
+Table 3: Penalizing d in training cuts repetition, at a small clean-PPL cost. Continued fine-tuning of ELF-B ( 128 optimizer steps); anti-attractor vs. the matched continue-train control; clean-PPL on the reject-to-1000 accepted set.                 
+
+> Variant rep % accept Gen-PPL clean-PPL Original checkpoint 6.80.07 19 .527 .4
+> Continue-train 6.40.08 20 .027 .9
+> Anti-attractor reg 3.30.24 25 .429 .1
+
+the matched continue-train control), while the same fine-tune without the penalty barely moves it (Table 3; recipe in App. E). 
+
+The steer is bounded: a usable dose window. Subtracting λd escapes only within a closed-form window [λ⋆, λ max ] (Prop. 2, App. A); λ=2 is the operating point inside it (Tab. 14, Fig. 5). Below it the dose is too weak and repetition is not cut; above it repetition stays low but two costs appear: the perturbed latent leaves the real-token manifold and the text decodes to non-words, an observable proxy for leaving the manifold (the rate spiking by λ≈8, Fig. 5), and the accepted text turns generic (self-BLEU climbs with λ, Tab. 14). 
+
+Why steering keeps quality competitive. The drive fk is large but nearly orthogonal to d≈v1
+
+(Prop. 1; App. A). ACE subtracts only λd, so it cancels repetition while leaving the text-writing drive intact, dropping repetition to near the human bar at competitive reference-free quality (Tab. 1), with self-BLEU the only mild cost. 5.2 COMPUTE -TO -CLEAN COMPARISON 
+
+ACE beats every feedback-side alternative we test, and makes clean text cheap. We bench-mark the four routes to less repetition on a common, hard-to-game footing: a reject-to-N loop scored by compute (NFE) and clean-PPL (Tab. 4; each route defined in App. D). ACE is the only one both cheap and clean; each alternative fails one axis. Rejecting full-SC post hoc is clean but expensive, its accepts scarce because the low Gen-PPL is the very repetition the bar removes. Dis-7Preprint 0.4 0.6 0.8 1.0     
+
+> Trajectory fraction
+> 2
+> 1
+> 0
+> 1
+> 2
+> 3
+> Feedback projection onto  d (a) Cause: feedback drifts along d; steering cancels it
+> Baseline
+> Steered
+> 0.4 0.6 0.8 1.0
+> Trajectory fraction
+> 0
+> 10
+> 20
+> 30
+> 40
+> Mid-trajectory repetition (%)  (b) Effect: repetition re-grows; steering holds it down
+> Baseline
+> Steered
+> Human 1.92%
+
+Figure 3: ACE cancels the repetition drift. Self-conditioning feedback drifts along a single direc-tion d into a repetition basin (a); ACE subtracts d and cancels that drift, holding repetition down (b). Baseline (red) vs steered (blue), ELF-B. Table 4: Only ACE reaches the human bar cheaply and at competitive clean-PPL. Compute-to-clean at γ=1 .0, 64 steps: direct-generation repetition, expected NFE ( 10 3 forward passes) to one human-clean sample ( seq-rep-4 ≤ 1.92% ), and clean-PPL on the reject-to-1000 accepted set. Full grid over all soft-SC variants and doses in Tab. 15. 
+
+Method rep % NFE clean-PPL Human (reference) 0.00 – 14 .4
+
+Full-SC + reject 6.82 1040 27 .6
+
+SC-reset 0.00 65 97 .4
+
+soft-SC mag ( α=0 .5) 1.94 138 34 .5
+
+soft-SC noise ( σ=0 .2) 6.15 997 27 .8
+
+ACE, λ=2 (ours) 2.11 144 30 .3
+
+abling self-conditioning (SC-reset) is cheap but decodes to the diverse nonsense the clean-PPL guard exists to catch. Soft-SC either barely cuts repetition or sacrifices coherence to remove it. ACE in-stead subtracts one direction and leaves the rest of the feedback intact, reaching human-clean text at competitive clean-PPL and 1.5–5× cheaper than full-SC rejection across sizes (Fig. 6). 
+
+Two ablations isolate the remaining choices, the direction and the dose. 
+
+5.3 ABLATIONS : DIRECTION AND DOSE 
+
+The direction: d matches or beats every estimator. In the idealized separability model the dif-ference of means coincides with two theory-optimal directions at once, the dynamical optimum v1
+
+(Prop. 1) and the Fisher discriminant (Fisher, 1936), and it stays cheap and robust : where those would need the loop’s Jacobian eigenvector or a noisy high-dimensional covariance inverse, d reads off only two class means. It matches or beats every alternative at the operating point (Tab. 5): a reg-ularized LDA, the optimal linear discriminant, only matches it, and d is in fact its simpler isotropic special case; the unsupervised top-PC and Jacobian eigenvector steer worse. The Jacobian eigen-vector’s lower clean-PPL is not a quality win: its direct-generation repetition stays high ( 5.03% ), so its accepted set is a small filtered subset rather than a fix. The direction itself is robustly recoverable: 
+
+cos to d stays in [0 .97 , 1.00] across tertile fractions and step windows and collapses to near zero for random or label-permuted controls (Tab. 8). A black-box search lowers repetition only slightly further ( 1.85 vs 2.11 ) at ∼8× the cost and along essentially the same axis ( cos ≈0.92 ) (Tab. 11); this cheap, label-free difference-of-means direction is thus near-optimal. 
+
+The dose: a fixed λ beats exact projection. Per-step projection (subtract the instantaneous d-component, ˆxk − ⟨ ˆxk, d⟩d) is the apparently optimal dose, removing exactly the offending com-ponent so it can never over-steer; yet it under -doses, because the loop re-amplifies that component 8Preprint Table 5: No alternative direction beats ACE’s cheap difference-of-means d. Direction estimators at the γ=1 .0 operating point, dose fixed at λ=2 (rep is the median); clean-PPL is a guardrail. Recoverability of d: Tab. 8; dose-form ablation: Tab. 9. 
+
+Direction ( λ=2 ) rep % clean-PPL Baseline (unsteered) 6.83 27 .7
+
+ACE (diff.-of-means d) 2.11 30 .6
+
+LDA 2.29 29 .6
+
+Logistic 3.25 31 .2
+
+Top-PC (unsup.) 5.87 33 .3
+
+Jacobian v1 5.03 23 .916 32 64 128 256 512     
+
+> Denoising steps
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> Repetition median (%)
+> (a) Across steps
+> Baseline
+> Steered
+> Human 1.92%
+> 0510 15 20
+> SC-CFG guidance scale
+> 0
+> 1
+> 2
+> 3
+> 4
+> 5
+> 6
+> Repetition median (%)
+> (b) Across guidance
+> Baseline
+> Steered
+> Human 1.92%
+
+Figure 4: Baseline repetition grows steeply with steps and guidance; steering suppresses it throughout. Baseline (red) vs single d (λ=2 , blue) over (a) denoising steps and (b) guidance scale. before the next step, and a fixed λ≈2 that pre-compensates the amplification does better (Tab. 9). The dose matches the loop’s Jacobian gain to an order of magnitude; the full sweep and usable window are in App. C.2. 
+
+# 6 THE DEFECT AND THE FIX GENERALIZE ACROSS KNOBS , SIZES , AND MODELS 
+
+We test whether the steering fix of §5 is an artefact of one configuration, and whether the underlying repetition defect is specific to ELF. Neither holds. 
+
+Steering generalizes across every inference knob. Steering at λ=2 drops repetition under every inference knob: across denoising steps and guidance scale, the two basin-deepening knobs in Fig-ure 4, and across the remaining knobs (noise scale, SDE/ODE sampler, SDE churn γ, and an 8-seed robustness band) at competitive clean-PPL (Table 7). 
+
+Cross-model: the direction transfers to other self-conditioned LMs. The same difference-of-means procedure recovers a steerable attractor direction on other continuous-latent diffusion LMs, so the mechanism is not ELF-specific (Table 6). On LangFlow and the same-recipe Plaid (Gulrajani & Hashimoto, 2023), both soft self-conditioning hints like ELF’s, the same recipe transfers: it cuts LangFlow’s repetition outright and Plaid’s heavy-repetition tail. 
+
+Highlight: one direction, estimated once, transfers across every knob and size, tuning-free. A
+
+single ELF-B direction dB , estimated once from a few hundred unlabeled samples on the smallest model, steers near-natively across all four inference knobs (steps, guidance, churn, noise) and across 
+
+> 6
+
+Plaid: pooled over several different-seed 4096 -step batches (baseline n=1536 , steer n=1632 ), steered along the raw n=1000 difference-of-means ( ∥d∥=0 .044 ; a unit vector over-doses and diverges). The steer barely moves the median but cuts the rep >5% tail by a third; all clean-PPL are reject-to-1000 .
+
+9Preprint Table 6: The repetition defect and the steering direction generalize across continuous-latent diffusion language models. The same difference-of-means recipe recovers useful steering direc-tions on other soft self-conditioned LMs; the rep >5% tail shows the defect is worse than the median suggests.                                 
+
+> base →steer Model rep % (median) rep >5 % Gen-PPL clean-PPL LangFlow 0.92 →0.27 20 .3→6.336 .8→44 .244 .6→46 .8
+> Plaid 0.77 →0.73 616 .0→10 .219 .5→20 .222 .5→22 .3
+
+model sizes ELF-B/M/L (Table 7): cosine 0.82 –0.96 to the natively re-estimated axis across knobs, 
+
+0.85 –0.88 across sizes. So d is a property of the model family, not of the size or operating point, and one d suffices. That a single direction steers every size hints the attractor is not a per-checkpoint quirk but a systematic bias of the self-conditioned training recipe, set by the shared paradigm rather than learned afresh at each scale. 
+
+# 7 CONCLUSION 
+
+We showed that the headline metric of self-conditioned (continuous) diffusion language models re-wards repetition: ELF’s low Gen-PPL comes mostly from repetition it rewards, so on Gen-PPL the 
+
+105 M model outranks the 342 M one that beats it once repetition is controlled. We traced this to its source, a contractive fixed point of the self-conditioning loop that forms a one-dimensional basin, and turned that mechanism into a fix. We propose ACE (Attractor-Contrast-Escape): it recovers the basin’s direction d once by a difference of means and subtracts it from the feedback; this removes most repetition, transfers across samplers and model sizes, and is partly internalizable by training. Since Gen-PPL rewards the very repetition ACE removes, we score the fix on a compute-to-clean evaluation against a human repetition floor, where it reaches genuinely non-repetitive text at compet-itive clean-PPL and 1.5–5× lower cost. That one direction serves every model size points to a defect of the self-conditioned paradigm itself rather than any single checkpoint, and the same construction recovers useful directions on other architectures. 
+
+# REFERENCES 
+
+Michael Cardei, Huu Binh Ta, and Ferdinando Fioretto. Simple self-conditioning adaptation for masked diffusion models. arXiv preprint arXiv:2604.26985 , 2026. Ting Chen, Ruixiang Zhang, and Geoffrey Hinton. Analog bits: Generating discrete data using diffusion models with self-conditioning. arXiv preprint arXiv:2208.04202 , 2022. Yuxin Chen, Chumeng Liang, Hangke Sui, Ruihan Guo, Chaoran Cheng, Jiaxuan You, and Ge Liu. Langflow: Continuous diffusion rivals discrete in language modeling. arXiv preprint arXiv:2604.11748 , 2026. Sander Dieleman, Laurent Sartran, Arman Roshannai, Nikolay Savinov, Yaroslav Ganin, Pierre H Richemond, Arnaud Doucet, Robin Strudel, Chris Dyer, Conor Durkan, et al. Continuous diffu-sion for categorical data. arXiv preprint arXiv:2211.15089 , 2022. Ronald A Fisher. The use of multiple measurements in taxonomic problems. Annals of eugenics , 7 (2):179–188, 1936. Antonio Franca and Alexander Tong. Hacking generative perplexity: Why unconditional text eval-uation needs distributional metrics. arXiv preprint arXiv:2606.08417 , 2026. Aaron Gokaslan and Vanya Cohen. OpenWebText corpus. http://Skylion007.github. io/OpenWebTextCorpus , 2019. Gene H Golub and Charles F Van Loan. Matrix computations . JHU press, 2013. 10 Preprint Ishaan Gulrajani and Tatsunori B Hashimoto. Likelihood-based diffusion language models. Ad-vances in Neural Information Processing Systems , 36:16693–16715, 2023. Tianxing He, Jingyu Zhang, Tianle Wang, Sachin Kumar, Kyunghyun Cho, James Glass, and Yulia Tsvetkov. On the blind spots of model-based evaluation metrics for text generation. In Pro-ceedings of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 12067–12097, 2023. Ari Holtzman, Jan Buys, Li Du, Maxwell Forbes, and Yejin Choi. The curious case of neural text degeneration. In International Conference on Learning Representations , 2020. Keya Hu, Linlu Qiu, Yiyang Lu, Hanhong Zhao, Tianhong Li, Yoon Kim, Jacob Andreas, and Kaiming He. Elf: Embedded language flows. arXiv preprint arXiv:2605.10938 , 2026. Tero Karras, Miika Aittala, Timo Aila, and Samuli Laine. Elucidating the design space of diffusion-based generative models. Advances in neural information processing systems , 35:26565–26577, 2022. Karen Kukich. Techniques for automatically correcting words in text. ACM computing surveys (CSUR) , 24(4):377–439, 1992. Ian Li, Zilei Shao, Benjie Wang, Rose Yu, Guy Van den Broeck, and Anji Liu. Breaking the factor-ization barrier in diffusion language models. arXiv preprint arXiv:2603.00045 , 2026. Jiwei Li, Michel Galley, Chris Brockett, Jianfeng Gao, and William B Dolan. A diversity-promoting objective function for neural conversation models. In Proceedings of the 2016 conference of the North American chapter of the association for computational linguistics: human language technologies , pp. 110–119, 2016. Xiang Li, John Thickstun, Ishaan Gulrajani, Percy S Liang, and Tatsunori B Hashimoto. Diffusion-lm improves controllable text generation. Advances in neural information processing systems , 35: 4328–4343, 2022. Shashi Narayan, Shay B Cohen, and Mirella Lapata. Don’t give me the details, just the summary! topic-aware convolutional neural networks for extreme summarization. In Proceedings of the 2018 conference on empirical methods in natural language processing , pp. 1797–1807, 2018. L´ aszl´ o N´ emeth. Hunspell spell checker. http://hunspell.github.io , 2003. Patrick Pynadath, Jiaxin Shi, and Ruqi Zhang. Generative frontiers: Why evaluation matters for diffusion language models. arXiv preprint arXiv:2604.02718 , 2026. Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei, Ilya Sutskever, et al. Language models are unsupervised multitask learners. OpenAI blog , 1(8):9, 2019. Junzhe Shen, Jieru Zhao, Ziwei He, and Zhouhan Lin. Codar: Continuous diffusion language models are more powerful than you think. arXiv preprint arXiv:2603.02547 , 2026. Adi Shnaidman, Erin Feiglin, Osher Yaari, Efrat Mentel, Amit Levi, and Raz Lapid. Activation steering for masked diffusion language models. arXiv preprint arXiv:2512.24143 , 2025. Robyn Speer, Joshua Chin, Andrew Lin, Sara Jewett, and Lance Nathan. Luminosoinsight/wordfreq: v2. 2. Zenodo , 2018. Robin Strudel, Corentin Tallec, Florent Altch´ e, Yilun Du, Yaroslav Ganin, Arthur Mensch, Will Grathwohl, Nikolay Savinov, Sander Dieleman, Laurent Sifre, et al. Self-conditioned embedding diffusion for text generation. arXiv preprint arXiv:2211.04236 , 2022. Yixuan Su, Tian Lan, Yan Wang, Dani Yogatama, Lingpeng Kong, and Nigel Collier. A contrastive framework for neural text generation. Advances in Neural Information Processing Systems , 35: 21548–21561, 2022. Yequan Wang, Jiawen Deng, Aixin Sun, and Xuying Meng. Perplexity from plm is unreliable for evaluating text quality. arXiv preprint arXiv:2210.05892 , 2022. 11 Preprint Sean Welleck, Ilia Kulikov, Stephen Roller, Emily Dinan, Kyunghyun Cho, and Jason Weston. Neural text generation with unlikelihood training. In International Conference on Learning Rep-resentations , 2020. Jin Xu, Xiaojiang Liu, Jianhao Yan, Deng Cai, Huayang Li, and Jian Li. Learning to break the loop: Analyzing and mitigating repetitions for neural text generation. Advances in Neural Information Processing Systems , 35:3082–3095, 2022. Kaiwen Zheng, Yongxin Chen, Hanzi Mao, Ming-Yu Liu, Jun Zhu, and Qinsheng Zhang. Masked diffusion models are secretly time-agnostic masked models and exploit inaccurate categorical sampling. In International Conference on Learning Representations , volume 2025, pp. 63186– 63227, 2025. 
+
+# A FORMAL ANALYSIS AND EMPIRICAL VALIDATION 
+
+This appendix develops the idealized linear model of the self-conditioning loop in derivation order, then validates the structure on the trained network. We linearize the loop (Lemma 1), read off the per-step decomposition splitting each update into drive and repetition mode (Lemma 2), and locate where the driven loop settles (Lemma 3). From this we derive the two consequences used in §4: a label-free difference of means recovers the repetition axis (Prop. 1), and subtracting it escapes the basin within a closed-form dose window (Prop. 2). Every displayed result is exact for this idealized model under its stated assumptions (a symmetrized Jacobian, an exogenous drive, and the scalar approximations flagged at each step); the final empirical section then estimates the Jacobian on the real network and checks each prediction against measurement. A.1 STRUCTURE OF THE LINEARIZED LOOP 
+
+Setup: where s, fk, and J come from. We reuse the pooled-feedback loop uk+1 = g(uk) of equation 4 and Assumption 1, writing (·) = 1
+
+> L
+
+PLl=1 (·)[ l] for the position pool. One step is the trained model Xθ evaluated on its two inputs, the current noisy latent zk and the fed-back estimate (taken uniform across positions, the pooling assumption of §4), at noise level tk:
+
+g(uk) = Xθ
+
+ [zk, uk1L], t k
+
+. (7) The model sees uk only through the fed-back channel, so we expand in that channel about the repetition fixed point u⋆ (Assumption 1): 
+
+Xθ
+
+ [zk, uk], t k
+
+ = Xθ
+
+ [zk, u⋆], t k
+
+| {z }
+
+> zeroth order
+
++ J (uk − u⋆)
+
+| {z }
+
+> first order
+
++ o(∥ak∥). (8) The three objects used throughout are the terms of equation 8: the denoising drive fk := 
+
+Xθ ([ zk, u⋆], t k) − u⋆ (zeroth order: a function of zk, t k, constant in uk), the self-conditioning Ja-cobian J := ∂ Xθ /∂ u u⋆ , and the self-conditioning map s(u) := u⋆ + J(u − u⋆) + o(∥u − u⋆∥),which fixes u⋆ by construction, s(u⋆) = u⋆. Collecting them gives the split 
+
+g(uk) = s(uk) + fk. (9) The one substantive reduction is treating the latent trajectory {zk} as exogenous, so fk acts as a uk-independent forcing (its uk-dependence beyond linear order is the o(∥ak∥) remainder). Downstream measurements support this: the drive is nearly orthogonal to the repetition axis (|cos( fk, v1)|=0 .15 ; App. A.4) and J is contracting with a dominant mode aligned to d (Tab. 10). Let ak = uk − u⋆ be the residual, with coordinates a(i) 
+
+> k
+
+= ⟨ak, vi⟩ in the eigenbasis of Assump-tion 1; by the symmetric-J idealization v1 is both a left and right eigenvector, so the v1-coordinate decouples below. 
+
+Lemma 1 (Linearized loop) . Near the fixed point the residual obeys the linear recursion 
+
+ak+1 = J a k + fk, (10) 
+
+the residual form of the loop equation 4 near u⋆.
+
+12 Preprint 
+
+Proof. Subtract u⋆ from the split equation 9 and use s(uk) = u⋆ +Ja k +o(∥ak∥) from equation 8: 
+
+ak+1 = Ja k + fk + o(∥ak∥), which is equation 10 once the higher-order remainder is dropped (exact for the idealized linear model). 
+
+Lemma 2 (Per-step decomposition) . The one-step change splits exactly as 
+
+∆uk = βk v1 + rk + fk, (5) 
+
+the decomposition of equation 5, with repetition coefficient βk = ( μ1 − 1) a(1)  
+
+> k
+
+and remainder 
+
+rk = P
+
+> i≥2
+
+(μi − 1) a(i) 
+
+> k
+
+vi. The drive fk is orthogonal to v1 (off the repetition axis, App. A.4), and the remainder collects the off-axis modes, which contract faster ( μi ≤ μ1 for i ≥ 2). Proof. From Lemma 1, ∆uk = uk+1 −uk = ak+1 −ak = ( J −I)ak +fk. Expanding the residual in the orthonormal eigenbasis (Assumption 1), ak = P 
+
+> i
+
+a(i) 
+
+> k
+
+vi, gives (J − I)ak = P
+
+> i
+
+(μi −
+
+1) a(i) 
+
+> k
+
+vi; separating the i=1 term as βkv1 from the rest as rk yields the stated identity. Since projecting equation 10 on vi gives the scalar recursion a(i) 
+
+> k+1
+
+= μia(i) 
+
+> k
+
++ f (i), whose homogeneous transient decays as μki , fastest for the smallest μi; so the off-axis transients ( μi ≤ μ1, i ≥ 2) die out at least as fast as the v1 transient. They do not vanish: each settles at the driven offset f (i)/(1 − μi)
+
+(the off-axis content w of Prop. 1), largest along v1. So v1 carries both the slowest transient and the largest steady offset, the persistent structured part of the residual (Lemma 3). 
+
+Lemma 3 (Where the driven loop settles) . With the drive frozen at fk ≡ f , the recursion equa-tion 10 converges geometrically (at rate μ1) to the unique fixed point a∞ = ( I − J)−1f , i.e. 
+
+u∞ = u⋆ + ( I − J)−1f . (6) 
+
+Its distance from u⋆ along the repetition axis is |a(1)  
+
+> ∞
+
+| = |f (1) |/(1 − μ1) = |f (1) |/ρ with 
+
+f (1) = ⟨f , v1⟩. Since f is near-orthogonal to v1 (f (1) small), u∞ sits a small but nonzero dis-tance from u⋆: a bounded repetition offset, not full collapse. This |f (1) |/ρ is a residual offset, not an amplification: stronger contraction (larger ρ, smaller μ1) leaves the drive less room to push the endpoint off u⋆, shrinking the distance and deepening repetition, whereas a near-marginal mode (ρ → 0) would let even a small f (1) hold u∞ far from u⋆.Proof. J is contracting, so its spectral radius μ1 < 1 and I −J is invertible (eigenvalues 1−μi > 0); the Neumann series P 
+
+> j≥0
+
+Jj = ( I − J)−1 converges. Unrolling equation 10 with fk ≡ f from 
+
+a0,
+
+ak = Jka0 +
+
+> k−1
+
+X
+
+> j=0
+
+Jj f −−−−→ 
+
+> k→∞
+
+(I − J)−1f , (11) the transient Jka0 vanishing at rate μk 
+
+> 1
+
+. Equivalently a∞ solves (I − J)a∞ = f ; projecting on the unit eigenvector v1, (1 − μ1)a(1)  
+
+> ∞
+
+= f (1) , so |a(1)  
+
+> ∞
+
+| = |f (1) |/(1 − μ1). The map ρ 7 → | f (1) |/ρ is decreasing on (0 , 1) , so a larger ρ shrinks the residual. 
+
+Nonlinear local existence and uniqueness. Lemma 3 is exact for the linearized loop; the same conclusion survives for the true nonlinear map by the implicit function theorem. Write the driven fixed-point condition as G(u, f ) = s(u) − u + f = 0; it is C1 near (u⋆, 0) (Assumption 1) with 
+
+G(u⋆, 0) = 0, and its u-Jacobian there is ∂uG = J − I, invertible whenever μ1̸ = 1 . The con-traction μ1 < 1 supplies this (measured μ1≈0.15 , App. A.4), so the theorem gives a neighborhood of f =0 on which the driven fixed point u∞(f ) exists, is locally unique, and is C1 in f , with first-order expansion u∞(f ) = u⋆ + ( I − J)−1f + o(∥f ∥): the linear formula equation 6 is its leading term. The theorem upgrades the linear solution to a locally unique branch of the nonlinear loop; it does not by itself produce u⋆, whose existence is Assumption 1 and which appears empirically as a near-fixed point (residual ≈0.07 ; App. A.4). 
+
+Frozen coefficients. Lemma 3 freezes J and f (the standard quasi-static linearization); both vary slowly over a finite budget, so the real trajectory tracks this instantaneous attractor rather than reach-ing it. 13 Preprint A.2 CONSEQUENCE 1: A LABEL -FREE DIRECTION RECOVERS THE AXIS 
+
+Definition 1 (Difference-of-means direction and steering) . Let a(1) = ⟨a, v1⟩ be the signed repetition-axis coordinate, oriented so +v1 points toward the repetition fixed point u⋆ and the rep score is monotone increasing in a(1) (deeper into the basin along +v1 is more repetitive). The trapped and free groups T , F are the top and bottom repetition tertiles, hence separated along signed a(1) with ¯a(1)  
+
+> T
+
+> ¯a(1)  
+
+> F
+
+, so the difference-of-means gap ¯a(1)  
+
+> T
+
+− ¯a(1) 
+
+> F
+
+̸ = 0 . The estimator 
+
+d = mT − mF
+
+∥mT − mF ∥ , mT = E[u | T ], mF = E[u | F ], (12) 
+
+defines the attractor direction, and steered self-conditioning feeds back ˜xk = ˆ xk −λ d with strength 
+
+λ ≥ 0.
+
+Proposition 1 (Difference of means recovers the attractor direction) . Split the feedback into the repetition axis and the rest, u = u⋆ + a(1) v1 + w, where the off-axis content w ⊥ v1 collects the drive fk and remainder rk of Lemma 2 (both ⊥ v1). Assume separability : the trapped/free split acts only through the on-axis coordinate a(1) , so the off-axis w has a group-independent mean, 
+
+E[w | T ] = E[w | F ]. Then the difference of means is parallel to the repetition axis, d ∥ v1
+
+(empirically partial; see the remark). Proof. Take the group-conditional mean under the model: for G ∈ {T , F} ,
+
+mG = E[u | G ] = u⋆ + ¯ a(1)  
+
+> G
+
+v1 + E[w | G ], ¯a(1)  
+
+> G
+
+:= E[a(1) | G ],
+
+the group-mean on-axis coordinate. Subtracting the two groups, 
+
+mT − mF = ( u⋆ − u⋆)
+
+| {z } 
+
+> =0
+
++ ¯a(1)  
+
+> T
+
+− ¯a(1) 
+
+> F
+
+v1 +  E[w | T ] − E[w | F ]| {z } 
+
+> =0
+
+: (13) the fixed point u⋆ is shared by both groups and cancels, and the off-axis term E[w | T ] − E[w | F ]
+
+vanishes by the modeling assumption. Only the on-axis term survives, so mT − mF = (¯ a(1)  
+
+> T
+
+−
+
+¯a(1)  
+
+> F
+
+)v1 ∥ v1, with scalar ¯a(1)  
+
+> T
+
+− ¯a(1) 
+
+> F
+
+̸ = 0 since the trapped group sits deeper along v1 (Definition 1). Normalizing, d ∥ v1 (up to sign). 
+
+d is the empirical counterpart of v1. The measured alignment is |cos( v1, d)|≤ 0.55 , and d steers better than the single-point v1 itself (Tab. 5) because it averages the basin-entry drift over the tra-jectory and many samples. We take Prop. 1 as the idealized motivation and d as the operational direction. A.3 CONSEQUENCE 2: A CLOSED -FORM STEERING WINDOW 
+
+Proposition 2 (Steering threshold and usable window) . Apply Definition 1 with d = v1 (Prop. 1). Track the signed axis coordinate ck = ⟨uk − u⋆, v1⟩ (the signed a(1) of Definition 1) and the distance from the repetition fixed point Dk = −ck ≥ 0 (+v1 points toward u⋆, so repetition is proximity to u⋆ and the rep score decreases in Dk). Projecting the steered recursion on v1 and 
+
+retaining the drive component f (1) = ⟨f , v1⟩ (proof) gives 
+
+ck+1 = μ1
+
+ ck − λ + f (1) , equivalently Dk+1 = μ1
+
+ Dk + λ + |f (1) |, (14) 
+
+with unique stable steady state 
+
+D∞ = 1 − ρρ λ + |f (1) |
+
+ρ . (15) 
+
+The first term is the steering-induced outward drift; the second is the baseline offset of Lemma 3 (D∞ = |f (1) |/ρ at λ=0 ), so steering adds to a nonzero starting distance, not to zero. Let acrit be the distance above which the orbit is non-repetitive and R the local manifold radius. In this steady-state scalar approximation repetition is escaped once λ ≥ λ⋆ and the decode stays on-manifold while λ ≤ λmax , with 
+
+λ⋆ = ρ a crit − | f (1) |
+
+1 − ρ , λmax = ρ R − | f (1) |
+
+1 − ρ . (16) 14 Preprint 
+
+Both thresholds lie below their f (1) =0 values by |f (1) |/(1 − ρ) (the baseline head start lowers the escape dose), while the usable window [λ⋆, λ max ] keeps width (R − acrit ) ρ/ (1 − ρ). We do not instantiate acrit , R, or f (1) on ELF, so the window is qualitative; its numeric range is the empirical 
+
+λ-sweep of App. C.2. Proof. Steered coordinate. Steering feeds back ˆxk − λv1, so ak+1 = J(ak − λv1) + fk. With 
+
+J symmetric (Assumption 1, so ⟨Jx , v1⟩ = μ1⟨x, v1⟩), projecting on v1 and keeping the drive component f (1) = ⟨fk, v1⟩ closes the scalar recursion ck+1 = μ1(ck − λ) + f (1) of equation 14, decoupled from the off-axis content. (Lemma 2 dropped f (1) as small; we retain it here so that λ=0 
+
+recovers the baseline offset c∞ = f (1) /ρ of Lemma 3 rather than a collapse to u⋆.) Since +v1
+
+points toward u⋆ while a = u − u⋆ is the outward displacement, ck ≤ 0, and the drive points outward ( f (1) ≤ 0); negating gives the distance form Dk+1 = μ1(Dk + λ) + |f (1) |, an outward drift forced by d, not assumed. 
+
+Steady state. Setting Dk+1 = Dk = D∞ in equation 14 gives (1 − μ1) D∞ = μ1λ + |f (1) |, so 
+
+D∞ = (1 − ρ)λ/ρ + |f (1) |/ρ as in equation 15. Subtracting this relation leaves Dk+1 − D∞ =
+
+μ1(Dk − D∞), decaying as μ k 
+
+> 1
+
+(μ1 < 1): the steady state is unique and stable on this axis. 
+
+Window. D∞ grows linearly in λ from the baseline |f (1) |/ρ , clearing acrit once λ ≥ λ⋆ and staying below R while λ ≤ λmax :
+
+D∞ ≥ acrit ⇐⇒ λ ≥ λ⋆, D∞ ≤ R ⇐⇒ λ ≤ λmax ,
+
+with λ⋆, λ max as in equation 16 (each inequality solved for λ). Equation equation 16 is the formal content of our empirical picture: steering removes the pull into the basin without touching the off-v1 content w that blanket soft-SC attenuates indiscrimi-nately (§5); a finite window [λ⋆, λ max ] exists (Fig. 5), with λ≈2 the conservative knee (repetition is monotone-decreasing in λ through λ≈4, so λ≈2 is the smallest comfortably-delivering dose, not the rep-minimizer) and over-steering past the upper edge eventually spiking non-words (by λ≈8) as predicted by λmax (Fig. 5). A.4 EMPIRICAL VALIDATION ON THE TRAINED LOOP 
+
+Existence, contraction, and local uniqueness of the fixed point. We test the premises of As-sumption 1 and the implicit-function note of App. A.1 directly on the trained loop. Freezing (zk, t k)
+
+at the formed basin (fraction 0.85 ) and iterating the full step u ← g(u) from the captured base point, the relative residual ∥g(u) − u∥/∥u∥ starts at 0.07 and settles near 0.06 , the floor set by the step’s sampling noise: g has a near-fixed point, and the captured base point already sits on it (pooled u⋆ captured vs. iterated, cos =1 .00 ). Power-iterating the Jacobian there gives a lead-ing gain μ1≈0.15 < 1 (captured and strictly-iterated base points agree, 0.148 vs. 0.149 ): the loop is contracting, so I − J is invertible, the implicit-function premise ( μ1̸ = 1 ) holds, and the driven fixed point is locally unique. The recovered axis is itself stable across the two base points (|cos( vcap 1 , vstrict 1 )|=0 .999 , and 0.999 to the saved v1 used in Fig. 2), the empirical face of local uniqueness. 
+
+A dominant contracting mode emerges as the basin forms. Estimating J by the matrix-free power iteration of Alg. 2 ( n=100 trajectories, 30 iterations) at base points of increasing convergence (trajectory fraction 0.5 → 0.85 ), the predicted structure appears: the spectral gap μ1/μ 2 rises from 
+
+≈1 to 2.7, one mode separating, and the label-free d aligns with it ( |cos( v1, d)| up to 0.55 , well above the random floor 1/√e=0 .044 ), with a perturbation along d amplified 2.2× over a random one (Tab. 10). So d aligns with the measured dominant mode of the loop, the empirical counterpart of the idealized d ∥ v1 (Prop. 1), with the alignment only partial; the full estimator anatomy and data efficiency are in App. B. 
+
+The drive is off the repetition axis (Lemma 2). The decomposition ∆uk = βkv1 + rk + fk
+
+resolves a seeming contradiction. The observed drift is dominated by the denoising drive fk, so its leading direction (top principal component of ∆u, noise-averaged and pooled over the late third of steps, n=200 trajectories) is near-orthogonal to both the repetition eigenvector ( |cos |=0 .15 , as is the 15 Preprint Table 7: One direction: d re-estimated per size or per knob recovers nearly the same axis, and the transferred ELF-B dB steers near-natively. λ=2 ; 64 steps and canonical knobs unless noted; 
+
+n=500 (operating-point row n=1000 ); seeds row: per-seed medians; – = too few accepted ( < 20 )to score.                                                                                     
+
+> Baseline Per-config dShared dBtransfer Config rep % clean-PPL rep % clean-PPL cos( d,dB)rep % clean-PPL
+> across sizes
+> ELF-M ( 342 M) 2.17 25 .20.54 29 .00.88 0.67 26 .1
+> ELF-L ( 652 M) 1.58 26 .10.41 28 .90.85 0.71 28 .5
+> across knobs (ELF-B, 105 M)
+> sampler ODE 5.05 36 .11.34 37 .80.82 1.51 38 .6
+> churn γ=1 .58.20 25 .12.43 25 .60.95 2.48 28 .2
+> guidance w=5 6.45 27 .33.09 30 .80.96 2.31 30 .4
+> guidance w=10 6.04 26 .52.11 28 .50.89 1.80 29 .9
+> noise σ=1 .516 .21 –4.53 25 .60.85 3.61 27 .2
+> operating point and seeds (ELF-B, 105 M)
+> Operating point 6.83 27 .72.11 30 .61.00 2.11 30 .65seeds, median 7.29 27 .91.97 30 .00.93 2.11 30 .4
+
+per-step drive itself, |cos( fk, v1)|=0 .15 ) and the steering direction ( |cos |=0 .09 ); but the Jacobian, a derivative, cancels the perturbation-independent fk and exposes the self-amplified mode, whose leading eigenvector is d. Drift and Jacobian thus agree rather than conflict, one reading the forcing 
+
+fk and the other the self-amplified mode βkv1; ACE acts along d ⊥ fk, leaving the drive intact (§5). 
+
+# B ANATOMY OF d (EXTENDED )
+
+This appendix collects the evidence behind §5. 
+
+One direction across samplers. A single base-config d steers across steps, guidance, γ,ODE/SDE, noise scales, seeds and model sizes at near-native repetition reduction. Re-estimating 
+
+d under each setting recovers nearly the same axis: cosine 0.82 –0.96 to dB over the knob and size re-estimates of Table 7 ( 0.86 –0.94 across the step sweep alone; §6). Pooling the feedback over six samplers ( 1500 trajectories) and re-estimating barely moves it: cos( dpooled , dbase ) = 0 .89 . The direction is thus a property of the model, not the operating point; the optimal strength λ (not the direction) absorbs the configuration dependence. 
+
+Estimator robustness. Difference-of-means is insensitive to its design choices. Holding the feed-back batch fixed and varying only the split, the recovered direction is near-identical, cosine to the base d in [0 .97 , 1.00] across the top-repetition tertile fraction ( 10 –50% ) and across which trajectory half is pooled, and near zero for the random or label-permuted controls (Tab. 8). The sterner test re-estimates d from a fresh feedback batch at each setting at the γ=1 .0 operating point against the frozen, deployed base d, folding in sampling noise: even then cosine stays 0.87 –0.93 across tertile fractions and 0.88 –0.91 across step windows, with the recipe itself re-estimated this way landing at 
+
+0.92 , the finite-sample noise floor every variant sits at. So d is not an artifact of a tuned split. 
+
+Dose form: fixed λ vs. per-step projection. At the fixed direction d, exact per-step projection (subtract the instantaneous d-component) under -doses, because the loop re-amplifies the removed component before the next step; a fixed λ=2 that pre-compensates that gain reduces repetition more (Tab. 9). The gain is the loop’s Jacobian amplification (Tab. 10), and the full λ sweep and usable window are in App. C.2. 
+
+How the estimators are computed (Tab. 5). All steer at λ=2 , and the supervised ones share one trapped/free label set (the top/bottom repetition tertiles difference-of-means uses). Difference-of-means (d) subtracts the two class means, μT −μF . Top-PC is the leading principal component 16 Preprint Table 8: The difference-of-means direction d is robustly recoverable. cos to the reference d on a fixed feedback batch, varying only the split (top-repetition tertile fraction, trajectory step window); near zero for the two degenerate controls. Main-text direction comparison: Tab. 5.                 
+
+> Estimation choice cos to d
+> Tertile 10% 0.97
+> Tertile 20% 0.99
+> Tertile 33% (diff. seed) 1.00
+> Tertile 50% 0.99
+> Window first half 0.97
+> Window second half 0.99
+> Random (control) 0.01
+> Permuted (control) 0.20
+
+Table 9: A fixed dose λ=2 beats exact per-step projection. Dose forms at the fixed difference-of-means d, γ=1 .0 (rep is the median); clean-PPL is a guardrail. Main-text direction comparison: Tab. 5.                   
+
+> Dose form (diff.-of-means d)rep % clean-PPL Baseline (unsteered) 6.83 27 .7
+> Fixed λ=2 (ACE) 2.11 30 .6
+> Proj. β=0 .56.33 27 .1
+> Proj. β=1 .05.95 27 .3
+> Proj. β=1 .55.82 26 .8
+
+of the mean-centered pooled feedback (unsupervised). Logistic is the weight vector of a logistic classifier fit to those labels. LDA is the regularized Fisher discriminant bΣ−1 
+
+> w
+
+(μT −μF ), with a trace-shrinkage of the pooled within-class covariance bΣw. The Jacobian v1 is the power-iteration mode (Alg. 2); random and permuted are the sign-scrambled and label-shuffled controls. 
+
+Supervision matters. d correlates with the feedback’s leading principal component (|cos( d, PC 1)| = 0.73 ), but the difference-of-means is what makes it reliable. The unsuper-vised PC 1 (sign-ambiguous) and the logistic discriminant recover the axis less faithfully and steer worse, and the theory-optimal Jacobian eigenvector v1 (the direction Proposition 1 says d should equal) worst of all; only the regularized LDA matches it (Tab. 5). Difference-of-means wins not by being more aggressive but because it averages the basin-entry drift over the whole trajectory and many samples, where a single-point linearization or a logistic classifier overfits. 
+
+Placebo controls. A random direction at the same dose is the sharpest control: it raises repetition rather than reducing it, since subtracting an uninformed vector is a pure off-manifold perturbation. So steering is not “any feedback perturbation helps”: only directions aligned with the attractor axis reduce repetition, and the reduction grows with alignment. On-manifold placebos agree: the same pipeline on shuffled labels, or on random halves within one tertile class, also fails ( cos ≤ 0.19 ). The one instructive exception, a within-trapped split that happens to capture residual depth spread (cos 0 .28 ), recovers part of the effect: even among placebos the effect tracks alignment. 
+
+The dominant mode of the feedback loop. A matrix-free power iteration on the self-conditioning Jacobian J = D s(u⋆) recovers its leading mode v1 (Alg. 2): each Jv is a central finite difference (perturb the fed-back estimate by ±εv uniformly over positions, take one denoising step, pool the change; the drive cancels, leaving the self-conditioning response), iterated from base points cap-tured along the trajectory. The Jacobian is averaged over n=100 trajectories and power-iterated 30 
+
+steps, with v1 oriented so the feedback projection rises with repetition. Since the finite-difference 
+
+J is generally non-symmetric, the μi are operator gains (singular-value-like norms), not necessar-ily eigenvalues unless J is symmetrized. The predicted structure emerges as the trajectory con-verges (Table 10, traced in Fig. 2b): the spectral gap μ1/μ 2 rises from 1.0 to 2.7 as subdominant modes collapse, d aligns with the leading eigenvector up to |cos | = 0 .55 (12 × the random baseline 17 Preprint 
+
+Algorithm 2 Attractor modes v1, v2: matrix-free deflated power iteration on the feedback Jacobian 
+
+Require: one-step map g at trajectory fraction f (the formed basin, f ≈0.85 ); iterations N ; probe scale ε
+
+Ensure: modes v1, v2 and gains μ1, μ 2 (spectral gap μ1/μ 2) 
+
+> 1:
+
+iterate the loop g forward (baseline run) and capture its feedback ˆxk at step k=⌊f T ⌋ (near-converged)  
+
+> 2:
+
+u⋆ ← 1
+
+> L
+
+PLl=1 ˆxk[l] ▷ captured from the run, not solved  
+
+> 3:
+
+ε ← 0.01 std( u⋆) 
+
+> 4:
+
+Jv := g(u⋆+εv) − g(u⋆−εv)/(2 ε) ▷ drive fk cancels  
+
+> 5:
+
+v1 ∼ N (0, I), normalized  
+
+> 6:
+
+for n = 1 , . . . , N do  
+
+> 7:
+
+w ← Jv 1; μ1 ← ∥ w∥; v1 ← w/μ 1 ▷ (Golub & Van Loan, 2013)  
+
+> 8:
+
+end for  
+
+> 9:
+
+v2 ∼ N (0, I), orthogonalized against v1 and normalized  
+
+> 10:
+
+for n = 1 , . . . , N do  
+
+> 11:
+
+w ← Jv 2 − ⟨ Jv 2, v1⟩v1; μ2 ← ∥ w∥; v2 ← w/μ 2 ▷ deflated  
+
+> 12:
+
+end for  
+
+> 13:
+
+return v1, v2, μ 1, μ 2
+
+Table 10: As the basin forms, a dominant mode emerges and d aligns with it. Jacobian power iteration ( γ=1 .5 runs); the gap near 1 at fraction 0.50 reflects no clearly dominant mode yet (power iteration near-degenerate there, |cos |=0 .37 ).                    
+
+> Traj. fraction Mid-traj rep Spectral gap μ1/μ 2|cos( v1,d)|Amp. d/random 0.50 0.093 1.02 0.37 1.16 0.70 0.133 2.30 0.55 2.13 0.85 0.141 2.67 0.52 2.21
+
+1/√e = 0 .044 ), and a perturbation along d is amplified 2.2× over a random one. d therefore tracks the loop’s measured dominant mode, not merely a statistical correlate of repetition, though recover-ing the single-point eigenvector directly steers worse than difference-of-means (Tab. 5). This is the same gain the loop re-applies to any component along d each pass, i.e. the amplification factor the fixed dose pre-compensates in the λ⋆ check (§5). The alignment is strong but not unit, consistent with d tracking the dominant mode of an evolving Jacobian rather than a single static operator. B.1 IS DIFFERENCE -OF -MEANS OPTIMAL ? A DIRECTLY -OPTIMIZED DIRECTION 
+
+Setup. The alternatives above are cheap heuristics (full sweep in Tab. 5); we also ask whether any 
+
+direction does better by optimizing the deployment objective itself (Algorithm 3). Steering leverage lives where the feedback varies, so the search space is the span of d and the feedback’s top principal components, starting exactly at d. The constrained objective’s hinge penalty is a quality guard that fires only when a candidate degrades Gen-PPL more than 10% past the d reference; PPL is never minimized, since under our thesis minimizing Gen-PPL would walk into the attractor. 
+
+d is near-optimal. An extensive search (up to 30 seeds across the two objectives) confirms direct optimization lowers repetition only slightly further than d, along essentially the same axis. On held-out seeds disjoint from the search ( n=600 ), the constrained objective (minimize repetition subject to an on-manifold/Gen-PPL constraint) edges d on repetition (median held-out 1.85% vs 
+
+2.11% , winning 24 /30 seeds) at matched Gen-PPL ( 27 .7 vs 27 .4). The unconstrained objective (minimize repetition alone, 15 seeds) lowers it a touch more (median 1.84% , winning 13 /15 seeds) at slightly worse Gen-PPL ( 28 .1), while staying aligned with d (median cos =0 .91 ): it trades a little quality for a small gain along essentially the same axis. The basin is thus approximately one-dimensional: a single cheap, label-free difference-of-means estimate captures it nearly as well as a direct optimization costing ∼8× the generations ( 3120 vs 400 ). 18 Preprint 
+
+Algorithm 3 Direct optimization of the steering direction (black-box, deployment objective) 
+
+Require: model fθ , base direction d, strength λ=2  
+
+> 1:
+
+collect N =300 baseline trajectories’ mean feedback {sn} 
+
+> 2:
+
+PC 1.. 10 ← top right-singular vectors of the centered {sn} 
+
+> 3:
+
+B ← ORTHONORMALIZE ([ d, PC 1, . . . , PC 10 ]) ▷ row 0 = d; 10 orthogonal escape directions  
+
+> 4:
+
+function EVAL (v, n, seed)  
+
+> 5:
+
+generate n samples steered by λv 
+
+> 6:
+
+return (rep median, Gen-PPL)  
+
+> 7:
+
+end function  
+
+> 8:
+
+θ∗ ← e0; (r0, p 0) ← EVAL (d, 120) ▷ start exactly at d 
+
+> 9:
+
+for t = 0 , . . . , 25 do  
+
+> 10:
+
+θ ← θ∗ + N (0 , σ 2 
+
+> t
+
+I), σt = 0 .35 · 0.93 t ▷ annealed proposal  
+
+> 11:
+
+(r, p ) ← EVAL (NORM (θB), 120 , seed t) 
+
+> 12:
+
+s ← r + 5 · max(0 , p − 1.1 p0) ▷ constrained; unconstrained: s ← r 
+
+> 13:
+
+if s < s ∗ then θ∗ ← θ 
+
+> 14:
+
+end for  
+
+> 15:
+
+return EVAL (NORM (θ∗B), 600 , fresh seed ) vs E VAL (d, 600 , fresh seed ) ▷ held-out comparison Table 11: Direct optimization improves on difference-of-means only slightly, along the same axis, at ∼8× the generation cost. Black-box search seeded at d, held-out seeds (ELF-B, λ=2 ); – 
+
+= reference row itself.                              
+
+> Direction (objective) rep % ↓Gen-PPL ↓Wins vs dgenerations cos to d
+> Difference-of-means d(ours) 2.11 27 .4–400 1.00
+> Constrained (min rep s.t. PPL) 1.85 27 .724/30 3120 0.92
+> Unconstrained (min rep only, 15 seeds) 1.84 28 .113/15 3120 0.91
+
+Seed-robustness. The estimator comparison (Tab. 5) is reported at the γ=1 .0 operating point (§5), where difference-of-means recovers the most steerable direction: it beats the unsupervised top-PC, the Jacobian eigenvector (Tab. 10), and the logistic discriminant outright, and matches LDA. This is seed-robust: across three estimation seeds difference-of-means stays at or near the top (best in two, within 0.6 points of LDA in the third), while the top-PC and the Jacobian eigenvector remain far worse ( ≥ 5% steered rep) in every seed. 
+
+Data efficiency. d is cheap to estimate: the cosine between d from n trajectories and the full-data direction reaches 0.69 at n=50 , 0.94 at n=200 , and 1.00 at n=800 . A few hundred unlabeled trajectories suffice, stable well before the repetition-tertile split matters. 
+
+Low-rank structure, one dominant self-amplified direction. A PCA of the per-sample mean feedback (mean-centered over the n=1000 samples; PC 1 is its leading singular vector) concentrates the variance in a few components (PC 1 explains 18% , the top five 46% ). The contraction makes 
+
+v1 a strong variance mode (propagating an isotropic initial spread through Jk gives covariance 
+
+Cov( ak) = σ2J2k = P 
+
+> i
+
+σ2μ2ki viv⊤ 
+
+> i
+
+, peaked on v1), so d concentrates in the top components (53% of ∥d∥2 in PC 1, 82% in the top five, 95% in the top ten). But it is subdominant : the larger, sample-varying denoising variation pushes the raw top PC off v1, so |cos( d, PC 1)|=0 .73 rather than 1 and a plain PCA cannot cleanly isolate the axis. d is instead the dominant self-amplification 
+
+mode, the feedback Jacobian’s leading eigenvector (Tab. 10), which is why the unsupervised PC 1
+
+steers worse (Tab. 5). 
+
+When repetition emerges. Repetition forms during the trajectory: how far a sample’s feedback drifts along d predicts its final repetition (Fig. 2), the orbit being drawn into the attractor (Assump-tion 1). A cheap mid-trajectory check on the feedback can therefore flag doomed samples and reject or reset them early, complementing the steering fix that removes the pull at its source. 19 Preprint Table 12: One direction: d is a single low-dimensional axis of the self-conditioning feedback. 
+
+Operating point (ELF-B, 64 steps, γ=1 .0), n=1000 ; its alignment with the Jacobian mode is Tab. 10, its irreplaceability Tab. 5.                       
+
+> Property of dat the operating point Value Aligned with the feedback’s leading PC, |cos( d,PC 1)|0.73
+> Energy of din PC 1/ top-5PCs 0.53 /0.82
+> Estimate stable from few samples, cos( dn,dfull )at n=50 /200 /800 0.69 /0.94 /1.00
+
+Table 13: Non-words are a second, decode-axis defect, invisible to Gen-PPL. Out-of-dictionary tokens; top block: main-text generations; bottom: conditional ELF-B checkpoints; †includes un-translated German; – = not applicable.                      
+
+> Generator Params non-word word % non-word sample % Human (BBC) –0.20 7.0
+> ELF-L-owt 652 M0.37 83 .1
+> ELF-M-owt 342 M0.39 81 .7
+> ELF-B-owt 105 M0.65 89 .9
+> ELF-B-xsum 105 M1.09 18 .5
+> ELF-B-de-en 105 M1.19 †18 .7
+
+What d encodes. A linear logit-lens read of d (projecting it through the output unembedding) ranks fragmentary subword pieces ( tri , ction , iding , lect ) among its top-scoring tokens and whole content words ( emotion , scholarship , stretched ) among its lowest: consistent with d encoding the repetitive, sub-lexical loop content that steering removes. 
+
+# C NON -WORDS AND THE STEERING WINDOW 
+
+C.1 NON -WORDS : A SECOND DEFECT , INDEPENDENT OF REPETITION 
+
+The non-word rate counts out-of-dictionary tokens (Kukich, 1992): length-≥ 4 alphabetic tokens with zipf frequency = 0 in wordfreq (Speer et al., 2018) (a hunspell (N´ emeth, 2003) cross-check preserves the ELF > human ordering). ELF generates them far above the human floor, and Gen-PPL never sees them (Table 13). This is a decode-axis defect, statistically independent of the trajectory-axis repetition: a sample can be repetitive, non-word-laden, both, or neither. The decoder reads each latent position by an independent arg max at t=1 with no autoregressive tie between neighbours, so individually legal word-pieces assemble into an illegal whole ( glued non-words, e.g. shock +d→shockd ). Because the two axes are independent, the self-conditioning fix targets repetition and not non-words; con-versely, over-steering pushes the latent off the embedding manifold and surfaces as a non-word spike (the λmax bound, Prop. 2), the signal that bounds the steering window from above. C.2 THE STEERING λ-WINDOW 
+
+Two surface readouts bound the usable dose from opposite sides (Fig. 5). Lower edge : sweeping 
+
+λ from 0, repetition falls steeply out of the basin from the closed-form threshold λ⋆≈1.5 (ELF-B crosses the human bar by λ≈2.5, the smaller models earlier). Upper edge : past it the latent leaves the embedding manifold and the non-word rate spikes ( 0.83% at λ=6 to 2.42% at λ=8 ), and repetition itself rebounds (back to 5.03% at λ=8 from the 1.11% floor at λ=4 ): over-steering fails on both counts. The usable window is λ ∈ [1 .5, 5] and we operate at λ=2 .A single ELF-B direction dB at this one dose carries across sizes (Table 14): it tracks each size’s natively re-estimated direction throughout. λ=2 is the knee of every size’s curve and the conserva-tive operating point: it brings ELF-M and ELF-L well under the human bar and the hardest model 20 Preprint 0 2 4 6 8 
+
+> Steering strength
+> 1
+> 2
+> 3
+> 4
+> 5
+> 6
+> Repetition median (%)
+> Usable window
+> Repetition (left axis) Non-word % (right axis)
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> Non-word (%)
+
+Figure 5: Steering has a finite usable window, as the theory predicts. λ-sweep on ELF-B: rep-etition (blue), non-words (red, marking the latent leaving the token-embedding manifold); shaded: repetition below the human bar, non-words at baseline. Table 14: Dose response across sizes: λ=2 (bold) is the conservative operating point. Shared ELF-B dB at dose λ across sizes (transfer); quality 512 -word matched. Upper edge ( λ≳5): Fig. 5. 
+
+defect quality 
+
+Model dose rep % ↓ accept ↑ c-PPL ↓ dist-1 ↑ s-BLEU ↓
+
+ELF-B ( 105 M) base 6.83 0.07 27 .7 0.53 0.09 1 3.32 0.27 28 .8 0.55 0.10 
+
+2 2.11 0.45 30 .6 0.53 0.15 3 1.37 0.67 31 .7 0.54 0.15 4 1.11 0.77 30 .6 0.52 0.18 
+
+ELF-M ( 342 M) base 1.89 0.51 25 .4 0.55 0.07 1 0.95 0.78 25 .9 0.56 0.07 
+
+2 0.67 0.88 26 .1 0.56 0.10 3 0.55 0.93 27 .0 0.56 0.11 4 0.52 0.91 29 .6 0.56 0.11 
+
+ELF-L ( 652 M) base 1.66 0.56 26 .2 0.56 0.07 1 0.98 0.77 27 .4 0.58 0.08 
+
+2 0.71 0.84 28 .5 0.58 0.10 3 0.47 0.89 30 .0 0.59 0.12 4 0.39 0.92 31 .3 0.59 0.14 
+
+ELF-B to just above it ( 2.11% vs the 1.92% bar; λ=3 takes ELF-B fully under, at 1.37% ), while 
+
+λ=4 over-steers the larger two. One direction and one mild dose thus suffice across sizes. 
+
+# D STEERING PARETO -DOMINATES EVERY SOFT SELF -CONDITIONING ALTERNATIVE 
+
+The benchmarked alternatives (Tab. 15). Each soft self-conditioning variant softens , rather than removes, the fed-back estimate ˆx before it re-enters the loop, with no retraining. mag rescales it, 
+
+ˆx ← α ˆx, so α=1 is the unmodified full-SC sampler and α=0 is SC-reset (feedback disabled; the α
+
+sweep is Tab. 2). noise adds Gaussian noise, ˆx ← ˆx + σϵ, to break the fixed point while keeping the signal. dist periodically decodes ˆx to token logits and feeds back the temperature-weighted embedding softmax( logits /T ) E (near-committed at small T , mean-like at large T ). cutoff turns self-conditioning off entirely past a mid-trajectory step (feeding back 0 thereafter); decay linearly anneals the feedback magnitude from full to a floor α over the trajectory; early-restart decodes ˆx
+
+once mid-trajectory, flags the samples already repeating (token seq-rep-4 above a threshold), 21 Preprint Table 15: Full compute-to-clean grid: every soft method at its lower- and higher-rep dose. 
+
+Reject-to-1000 at γ=1 .0, 64 steps (pass seq-rep-4 ≤ 1.92% ); rep % is the direct-generation median, NFE in 10 3 forward passes, clean-PPL on the accepted set. The compact main-text view is Tab. 4. 
+
+lower-rep dose higher-rep dose Method rep % NFE clean-PPL rep % NFE clean-PPL Human (reference) 0.00 – 14 .4 reference 
+
+ACE, λ=2 (ours) 2.11 144 30 .3 our fix 
+
+hard SC (reset / Full-SC) 0.00 65 97 .4 6.82 1040 27 .6
+
+soft-SC mag ( α=0 .5/0.7) 1.94 138 34 .5 4.56 416 29 .1
+
+soft-SC noise ( σ=0 .4/0.2) 5.06 630 29 .8 6.15 997 27 .8
+
+soft-SC dist ( T =1 /2) 1.55 120 35 .1 1.52 119 34 .9
+
+SC cutoff ( τ =0 .3/0.5) 0.00 65 91 .5 0.51 75 62 .1
+
+SC decay ( 1→0 / 0.5) 1.96 140 38 .5 5.96 593 28 .7
+
+SC early-restart ( τ =0 .5/0.3) 1.05 97 54 .9 3.56 173 74 .3ELF-B ELF-M ELF-L  
+
+> 10 3
+> 10 4
+> Generations to 1000 clean (log)
+> 5.2 ×
+> 1.8 ×1.6 ×
+> Compute-to-clean cost
+> Baseline
+> Steered
+> Ideal (1000)
+
+Figure 6: Steering makes human-clean text 1.5–5× cheaper. Generations to 1000 samples under the human bar, baseline vs steered, by model size (log scale); the per-method head-to-head at one size is Tab. 4. and resets their feedback to 0 for the remaining steps. Full-SC (post-hoc reject) runs the unmodified sampler followed by the same reject-to-1000 loop. ACE instead subtracts one direction, ˆx ← ˆx − λd
+
+(§5), leaving the rest of the feedback intact. At the shared reject-to-1000 caliber, steering Pareto-dominates this frontier (§5; the full grid over every variant and both doses is Tab. 15); Fig. 6 gives the per-size cost of the win. 
+
+# E BUILDING THE FIX INTO TRAINING (EXTENDED )
+
+Setup. We continue-train ELF-B from the released checkpoint on OpenWebText (fresh AdamW, weight decay 0, 50 -step warmup, effective batch 512 , learning rate 10 −4, 128 optimizer steps), then evaluate the EMA weights by plain unsteered sampling on n=1000 samples (rep: medians; clean-PPL: reject-to-1000 ), on the same footing as the released baseline. EMA decay is lowered from the release’s 0.9999 to 0.999 so the average tracks this short run. The continue-train control ( w=0 ) and the anti-attractor regularizer ( w=7 , best) of Table 3 share this recipe. 
+
+Anti-attractor regularization. Rather than clean the feedback, teach the model not to produce 
+
+attractor-direction feedback. Let ˆxθ (zk, t k) ∈ RL×e be the model’s clean-latent prediction at noise level tk and uθ = 1
+
+> L
+
+PLl=1 ˆxθ [l] ∈ Re its position-pooled estimate (the feedback u of §4, equa-tion 4). With the frozen difference-of-means direction d (equation 12), the anti-attractor regularizer is 
+
+Lattr (θ) = Ez0, k 
+
+h
+
+ReLU  ⟨uθ , d⟩2 i
+
+, (17) 22 Preprint and we continue-train against 
+
+L(θ) = Lbase (θ) + w Lattr (θ), w ≥ 0, (18) with Lbase the standard flow-matching loss. The one-sided ReLU is deliberate: only the +d half-line is the repetitive basin (Prop. 2), so we penalize the model for pushing its own clean estimate toward the attractor while leaving the −d side and all off-d content w ⊥ d untouched. Because the penalty acts only on ˆxθ , the trained model needs no test-time intervention. 
+
+Result. A short fine-tune (best at w=7 ) lowers plain repetition with coherent text at a small clean-PPL cost (Table 3); the same budget without the penalty ( w=0 ) barely moves it, so the reduction is the regularizer’s, not the extra training. This confirms d is a trainable, causal property, not just an inference-time handle. 
+
+# F CONTROLS AND EXAMPLE OUTPUTS 
+
+This appendix supports the causal test of §3 with the repetition–PPL association (§F.1), and collects example outputs: non-words (§F.2) and baseline-vs-steered repetition samples (§G). F.1 CONDITIONAL PPL COLLAPSE (64 -STEP OPERATING POINT )
+
+Association. Table 16 stratifies the 1,000 samples of the 64 -step ( γ=1 .0) run by repetition; me-dian GPT-2 PPL falls monotonically as repetition rises (Pearson r(REP , PPL )= −0.63 , Spearman 
+
+ρ=−0.68 ). Table 16: Perplexity falls monotonically as repetition rises (association). 64 -step run. rep range n median Gen-PPL 
+
+0−0.5% 9 32 .80.5−2% 69 27 .12−5% 270 23 .65−10% 366 19 .810 −20% 239 15 .7
+
+> 20% 47 10 .3
+
+F.2 EXAMPLE NON -WORD OUTPUTS 
+
+All examples are from the ELF-B 64 -step ( γ=1 .0) run. 
+
+Non-words (with context). The defect spans coinages, glued-together word pairs, and mis-spellings: • psychloginism : “ The goal of psychloginism is to learn the. . . ”• intersignal : “ . . . short of a bipartisan intersignal vote that would happen. . . ”• evenfigured : “ . . . may occur and we’ve evenfigured out a way to. . . ” (even + figured) • slamed : “ . . . his wife when he slamed a woman in the. . . ” (slammed) • encryptted : “ . . . contains the first encryptted element. . . ” (encrypted) 
+
+# G QUALITATIVE SAMPLES : BASELINE VS . STEERED 
+
+Repetition emerging along the trajectory. Decoding one sample’s current estimate at successive trajectory fractions shows the basin forming, the text counterpart of Figure 3. Table 17 shows one draw under baseline and steering at three trajectory stages: the baseline stays locked in the basin at 
+
+38 –45% repeated 4-grams, while the steered run stays near the human bar ( 1.0–3.1% ). 23 Preprint Table 17: The defect and the fix in one sample, along the trajectory. Same seed as Figure 3, baseline vs steered ( λ=2 ); highlighted = the cell’s dominant looped 4-gram; [. . . ] = elided. 
+
+Stage Baseline (full-SC) Steered (λ=2 ) rep 
+
+early When I spoke to my [. . . ] the definition of transgender person. She said, “I don’t [. . . ] the definition of transgender person’s life history, or does [. . . ] the definition of transgender person’s life history? I mean, [. . . ]person’s life history. People asked [. . . ]person’s life history? I’s person’s life history? Interviewer – [. . . ][. . . ] (×8 in 717 words) 
+
+In his speech to the U.N. General Council ad-dressing the why the cri-sis [. . . ] the U.N. general council said. ”The crisis is com-pletely [. . . ] the U.N. General Council and international officials have pressed [. . . ] (×3 in 686 words) 
+
+22.5% → 1.6% 
+
+mid When I got out to [. . . ] the definition of transgender person. She said, “I don’t [. . . ] the definition of transgender person’s life history right or [. . . ] the definition of transgender person’s life history? I mean, [. . . ]person’s life history – people [. . . ]person’s life his-tory? And what [. . . ]person’s life history? Interviewer – [. . . ][. . . ] (×8 in 716 words) 
+
+In his speech to the U.N. General Assembly on Thursday, on the cri-sis [. . . ] the U.N. General Assembly said. ”The crisis is com-pletely [. . . ] the U.N. General Assembly in Paris, where a unani-mous [. . . ]and Palestinian officials have pushed [. . . ] (×4 in 681 words) 
+
+27.8% → 1.9% 
+
+final Once I got to know [. . . ] the definition of transgender person. She said, “I don’t [. . . ] the definition of transgender person’s life history correct or [. . . ] the definition of transgender person’s life history? I mean, [. . . ]person’s life history. But people [. . . ]person’s life history? And what [. . . ]person’s life history? Interviewer – [. . . ][. . . ] (×8 in 715 words) 
+
+In his address to the U.N. general assembly on Thursday,addressing the crisis in [. . . ] the U.N. general assembly said. ”The crisis is com-pletely [. . . ] the U.N. general assembly in Paris, where a joint [. . . ]and Palestinian officials have pushed [. . . ] (×4 in 672 words) 
+
+26.8% → 1.8% 
+
+# H RELATED WORK 
+
+Diffusion-LM failure modes: metric and decoder. Prior work on diffusion-LM failure modes mainly diagnoses evaluation artifacts or decoding bottlenecks, not text-visible repetition directly. The metric line shows generative perplexity is distorted by low-entropy or reduced-temperature sampling (Zheng et al., 2025; Pynadath et al., 2026), echoing broader evidence that model-based perplexity is unreliable for generation (Wang et al., 2022; He et al., 2023) and gameable end-to-end by naive samplers (Franca & Tong, 2026); this line is mostly on discrete or masked models. The 
+
+decoder line targets per-position rounding and independence with stronger decoders (Li et al., 2022; Dieleman et al., 2022; Li et al., 2026; Shen et al., 2026): it addresses the discretization bottleneck, not the self-conditioning feedback direction behind text-visible repetition. An entropy view is in any case blind to whether the tokens are real words. 
+
+Reading the text, not the metric or the decoder. We instead measure what the models generate, counting the defects a reader sees against human references. The closest prior model, the self-conditioned embedding diffusion of Strudel et al. (2022), reports likelihood/entropy trade-offs under guidance; relative to it and to the AR-repetition line (Xu et al., 2022), we study the generated text itself rather than a clean-embedding probe or the metric. 
+
+Relation to autoregressive degeneration. Repetition is the denoising-axis analogue of classical AR-decoding degeneration (Holtzman et al., 2020): the self-conditioning feedback plays the role of AR’s repeated-context prior and the low-entropy committed regime that of greedy maximization, but the errors compound along the denoising-step axis rather than the sequence-order axis. The correspondence is prescriptive: because repetition is set in the continuous latent, upstream of token 24 Preprint selection, decode-time fixes such as contrastive search (Su et al., 2022) are poorly placed to reach it, whereas the orthogonal non-word defect is amenable to AR-style contextual decoding (App. C). 
+
+Relation to masked diffusion. Two concurrent threads on masked diffusion bound our claims. Cardei et al. (2026) add self-conditioning to masked diffusion and report a large drop in generative perplexity without an explicit repetition analysis; whether masked, non-committed feedback enters the attractor we describe is left open. Shnaidman et al. (2025) steer a behavioral knob of masked DLMs (safety refusal) along an approximately one-dimensional subspace. A single-direction ac-count of a DLM is thus not unique to us; what is specific here is a contractive attractor of the con-tinuous self-conditioning loop, recovered label-free and targeting the generative-perplexity defect, captured by one frozen direction that generalizes across inference settings and model scales. 25

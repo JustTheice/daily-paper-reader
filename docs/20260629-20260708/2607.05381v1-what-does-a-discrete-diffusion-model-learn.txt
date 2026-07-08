@@ -1,0 +1,5875 @@
+Title: What Does a Discrete Diffusion Model Learn?
+
+URL Source: https://arxiv.org/pdf/2607.05381v1
+
+Published Time: Tue, 07 Jul 2026 03:45:12 GMT
+
+Number of Pages: 66
+
+Markdown Content:
+# What Does a Discrete Diffusion Model Learn? 
+
+Rodrigo Casado Noguerales ∗1, Bernhard Sch¨ olkopf 1,2,3 , Thomas Hofmann 1, and Aran Raoufi 1
+
+> 1
+
+ETH Zurich 
+
+> 2
+
+Max Planck Institute for Intelligent Systems, T¨ ubingen 
+
+> 3
+
+ELLIS Institute T¨ ubingen 
+
+July 7, 2026 
+
+Abstract 
+
+What does a discrete diffusion model learn: a denoiser, a score ratio, or a bridge plug-in predictor? At the level of jump rates, these are one object in different coordinates, and reading a neural network in the wrong coordinate changes the process being trained and sampled. Starting with a rigorous derivation of the continuous-time Markov chain (CTMC) ELBO for any noising process, boundary terms included, we prove the Oracle Distance theorem: the negative ELBO is exactly equal to the data entropy plus the path KL from the oracle reverse process to the learned one, not merely a bound. Its unique optimizer is therefore the conditional expectation of the true reverse jump rate given the current noisy state, and its irreducible cost is the rate at which the forward process Zt destroys information about the clean data Z0,
+
+− ddt I(Z0; Zt), so every noising process shares the same best achievable negative ELBO: the data entropy. For sequences with token-factorizing noise, the oracle projection yields three exact coordinates for the optimizer: denoiser, cavity (bridge plug-in), and score, with closed-form conversions among them. This framework identifies which law each loss in the literature actually optimizes, recovering MDM, UDM, SEDD, and GIDD as special cases; explains why denoiser and cavity coincide for masked diffusion but not for uniform diffusion; proves that a denoiser parameterization makes the uniform ELBO diverge at initialization while the bridge plug-in stays finite; and calibrates ELBO implementations exactly at initialization. Every identity is verified numerically, without approximation, on an exactly solvable model. 
+
+> ∗
+
+Correspondence: rcasado@ethz.ch 
+
+1
+
+> arXiv:2607.05381v1 [cs.LG] 6 Jul 2026
+
+# Contents 
+
+1 Introduction 32 A general theory of discrete diffusion 4
+
+2.1 The general theory . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 42.2 Discrete diffusion for sequential data . . . . . . . . . . . . . . . . . . . . . . . . . . . 11 
+
+3 Background and related work 17 4 A continuous-time discrete diffusion framework 19 
+
+4.1 Variational formulation of diffusion models . . . . . . . . . . . . . . . . . . . . . . . 19 4.2 CTMC formulation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 21 4.3 The CTMC ELBO . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24 4.4 Importance sampling, time clocks, and the empirical ELBO . . . . . . . . . . . . . . 29 
+
+5 What negative ELBO minimization really optimizes 31 
+
+5.1 ELBO as distance to the oracle reverse process . . . . . . . . . . . . . . . . . . . . . 31 5.2 The ELBO as a projection problem and the Pythagorean decomposition . . . . . . . 33 5.3 The oracle ELBO is the rate of information loss . . . . . . . . . . . . . . . . . . . . . 35 5.4 The universal NELBO floor . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 36 5.5 An alternative proof of the Oracle Distance theorem . . . . . . . . . . . . . . . . . . 37 5.6 A Bregman-divergence and generator-matching view . . . . . . . . . . . . . . . . . . 39 
+
+6 Sequence modeling 41 
+
+6.1 Token-factorizable noising processes . . . . . . . . . . . . . . . . . . . . . . . . . . . 41 6.2 Three exact token-wise factorizations of the reverse rate . . . . . . . . . . . . . . . . 42 6.3 Parameterizations in the literature . . . . . . . . . . . . . . . . . . . . . . . . . . . . 45 
+
+7 Masked, uniform, and GIDD noising processes 49 
+
+7.1 Common CTMC form . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 49 7.2 Masked diffusion . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 50 7.3 Uniform diffusion . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 52 7.4 Generalized interpolating discrete diffusion . . . . . . . . . . . . . . . . . . . . . . . 56 
+
+8 Numerical verification 60 9 Conclusion 60 
+
+21 Introduction 
+
+Discrete diffusion models offer a natural route to generative modeling on language and other cat-egorical data: corrupt a sequence directly on its alphabet, then learn to run the corruption back-ward [AJH +21, HNJ +21]. Continuous-time Markov chain (CTMC) formulations make this precise, replacing a chosen finite sampling grid by a genuine jump process, so that a generative model is determined by the reverse jump rates it induces [CBDB +22]. This paper starts from a simple observation. In the discrete-diffusion literature the learned reverse process is described through several apparently different objects (denoisers, score ratios, bridge plug-ins, leave-one-out predictors, masked-token losses, finite-step reverse kernels [LME24, SAS +24, vRFD +25]), often treated as alternative names for the same model. They are not. Aneural network’s output is not a reverse process until one specifies how it is converted into jump rates, and reading the same output in the wrong coordinate changes the continuous-time Markov chain being optimized and sampled from. This distinction is not purely academic. In uniform diffusion, the standard bridge-plug-in objective does not train an ordinary denoiser that predicts the clean token from the full noisy sequence; it trains a cavity law, a predictor that uses the noisy context but does not condition on the local noisy token it is about to revise. Masked diffusion hides this because, at a masked position, the local observation carries no information about the clean token, so denoiser and cavity coincide. Uniform and hybrid diffusion have no such cancellation, and for them the conversion between coordinates is an analytic part of the model, not an implementation detail. The central question is therefore: what does negative-ELBO minimization actually optimize? 
+
+Our answer is path-based. The continuous-time ELBO is not a loose surrogate for likelihood but an exact path-law divergence between two reverse jump processes, the oracle process determined by the forward noising law and the learned process induced by the model, an identity we call the 
+
+Oracle Distance (Theorem 3). Training therefore makes the model’s entire reverse trajectory , not only its endpoint distribution, match the oracle’s. At the infinitesimal level, training observes the clean data and so has access to the clean-conditioned reverse bridge; sampling does not, and the learned rate may depend only on the noisy state currently visited. The ELBO therefore performs a projection : it averages the clean-conditioned bridge rate over the posterior information available at the noisy state, and the re-sult is exactly the marginal reverse rate needed for generation, the jump-process analogue of the conditional-mean principle behind regression and flow matching. This projection also explains the value of the objective: once the fixed data-entropy floor and endpoint terms are accounted for, the irreducible part of what remains is exactly the information the forward process destroys, accumulated over diffusion time. Every noising process pays the same total oracle price, and they differ only in when and where they spend it, and in how the chosen parameterization conditions the resulting learning problem. For token-factorizing noising processes the projection yields an explicit dictionary : the same reverse rate can be written in denoiser, cavity, or score coordinates, each valid but only after the correct conversion. This resolves several puzzles at once: why masked diffusion reduces to ordinary denoising cross-entropy, why the bridge plug-in targets a cavity law in uniform diffusion, why a denoiser parameterization can be ill-conditioned near the clean endpoint, and how score-based discrete diffusion fits into the same continuous-time object. The same lens then separates the two error sources of a trained model: the reverse-rate error that the ELBO measures, and the factorization error that only sampling reveals. 3Contributions. This paper gives a self-contained, general theory of continuous-time discrete diffusion; §2 surveys the core results and insights and we recommend starting there, deferring the full derivations to §§ 4–7 and related work to §3. Concretely, our main contributions are: 
+
+• A general CTMC ELBO. Building on [CBDB +22], we derive the continuous-time discrete-diffusion ELBO for finite-state jump processes, with its reconstruction and terminal-prior boundary terms, the support and regularity conditions under which it is well defined, and two complementary derivations (an infinitesimal-KL limit and a Girsanov argument). The result is a mechanical recipe for the training objective of any forward noising process. 
+
+• The ELBO as path divergence: the Oracle Distance. After the fixed entropy and endpoint terms are separated, the negative ELBO is exactly the reverse-time path divergence from the oracle reverse process to the learned one (Theorem 3). The objective is therefore a distance between reverse dynamics, not merely a likelihood bound. 
+
+• The ELBO as a reverse-rate projection. The population optimizer is the posterior average of the clean-conditioned reverse bridge rate, viewed from the information available at the current noisy state. This yields a Pythagorean decomposition into irreducible information loss and model mismatch, and identifies the universal oracle floor, the data entropy. 
+
+• One reverse rate, three coordinates. For product CTMCs we express the same optimal reverse rate in denoiser, cavity, and score coordinates, with closed-form conversions among them. This identifies which law is optimized in masked, uniform, score-based, and hybrid discrete diffusion; in particular, the standard bridge plug-in is optimized by the cavity law, not the denoiser. 
+
+• Practical consequences. The dictionary explains why masked diffusion admits ordinary denoising cross-entropy, why denoiser parameterizations are ill-conditioned for uniform and full-support hybrid diffusion, and why the bridge plug-in targets a cavity law; it calibrates ELBO implementations at initialization, including the boundary terms usually dropped in cross-method comparisons; and it separates a trained model’s reverse-rate error, which the ELBO measures, from the factorization error of parallel-token sampling, which the ELBO cannot see. 
+
+# 2 A general theory of discrete diffusion 
+
+This section is an exposition of the main results, conceptual intuitions, and practical insights of the paper; the full derivations live in §§ 4–7 for the interested reader. 
+
+2.1 The general theory 
+
+Diffusion models turn sampling from a complicated data distribution into the problem of reversing a simple noising process. One chooses a forward stochastic process ( Zt)t∈[0 ,T ] whose marginals 
+
+qt := Law( Zt) interpolate between the data law q0 = pdata and a terminal law qT from which sampling is easy; generation then reduces to learning the reverse dynamics: sample ZT ∼ qT , run an approximate reverse process back to time zero, and hope that the resulting law is close to q0.In discrete diffusion the noising process corrupts data directly on its finite alphabet, so the object to reverse is a discrete Markov evolution rather than a Gaussian perturbation in Euclidean space. 4From VAEs to the diffusion ELBO. Historically, the training objective behind diffusion mod-els comes from the variational autoencoder [KW14, RMW14]. For a latent-variable model pθ(x, z ), with data x and latent z, and encoder law q(z | x), Jensen’s inequality gives log pθ(x) = log Eq(z|x)
+
+ pθ(x, z )
+
+q(z | x)
+
+
+
+≥ Eq(z|x)
+
+
+
+log pθ(x, z )
+
+q(z | x)
+
+
+
+= Eq(z|x)[log pθ(x | z)] − KL 
+
+
+
+q(· | x) pθz
+
+
+
+,
+
+whose RHS is the usual variational bound: the evidence lower bound (ELBO), a reconstruction term minus a prior-matching term ( §4.1). Diffusion models use the same variational principle, but the latent variable is no longer a single random variable: it is the whole noising trajectory. In discrete time, fix clean data z0 and let the latent variable be the Markov chain z1: N =(z1, . . . , z N ), with forward law q1: N |0(z1: N | z0) = QNk=1 qk|k−1(zk | zk−1). If the learned reverse model has terminal prior pθN , final reconstruction kernel pθ
+
+> 0|1
+
+(z0 | z1), and reverse kernels pθk−1|k, so that the full model law is pθ 
+
+> 0: N
+
+(z0: N ) = pθN (zN ) QNk=1 pθk−1|k(zk−1 | zk), the VAE bound becomes ELBO N (θ; z0) = Eq1|0 [log pθ
+
+> 0|1
+
+(z0 | z1)] − KL 
+
+
+
+qN |0(· | z0) pθN
+
+
+
+−
+
+> N
+
+X
+
+> k=2
+
+Eqk|0 KL 
+
+
+
+qk−1|k, 0(· | zk, z 0) pθk−1|k(· | zk)
+
+
+
+.
+
+In particular, the discrete-time ELBO already has the structure that will persist in continuous time: a reconstruction term at the left endpoint, a prior term at the right endpoint, and a sum of local discrepancies between the true reverse bridge kernels (the clean-conditioned kernels qk−1|k, 0(· | 
+
+zk, z 0)) and learned reverse kernels. Proposition 1 ( §4.1) gives the exact finite-chain statement used as the discrete skeleton for the CTMC derivation. 
+
+Continuous time and the reverse jump rate. Passing from a discrete chain to a continuous-time Markov chain (CTMC) removes the arbitrary choice of a discretization level N , allows time points to be sampled continuously, and makes time changes or importance-sampling clocks part of the mathematical formulation rather than implementation details. It also exposes the infinitesimal object that the model is trying to learn: the reverse jump rate. This is useful both practically, because models can be trained from randomly sampled times and without fixing the sampling grid, and mathematically, because the ELBO becomes the path-space relative entropy and has an exact local expression in terms of jump rates. To derive this continuous-time ELBO, let us introduce first some notation. A CTMC process ( Zt)t∈[0 ,T ] is characterized through its generator Qt, which governs the first-order probabilities of jumping from the current state to another or staying: 
+
+P(Zt+h = y | Zt = x) = 
+
+(
+
+h Q t(x, y ) + o(h), y̸ = x, 
+
+1 + h Q t(x, x ) + o(h), y = x, Qt(x, x ) := − X 
+
+> y̸=x
+
+Qt(x, y ).
+
+We write qt = Law( Zt) and qt|0(· | z0) = Law( Zt | Z0 = z0). The clean-conditioned reverse rate and the marginal reverse rate are 
+
+bQt(z, y | z0) = Qt(y, z ) qt|0(y | z0)
+
+qt|0(z | z0) , bQt(z, y ) = Qt(y, z ) qt(y)
+
+qt(z) , y̸ = z. (1) 5In diffusion models, the object ultimately learned is a reverse process. A neural network may be read as a denoiser, a score ratio, or a bridge plug-in, but none of these is a generative process until it is converted into reverse jump rates, which we denote bQθt (zt, y ): functions of the noisy state 
+
+zt, never of the hidden clean data z0. The paper later compares these parameterizations in detail, but at the level of the ELBO they all enter through the rates bQθt .
+
+The continuous-time ELBO. For scalars a, b ≥ 0, define Φ( a, b ) := a log ab − a + b, (2) with the usual conventions at the boundary. This local rate divergence is the Bregman divergence of the negative-entropy potential F (u) = u log u − u, and it describes the KL rate between two CTMC processes. In this paper we prove that, under the support and regularity assumptions of Theorem 1 and up to the two endpoint comparison terms, the continuous-time ELBO on [0 , T ] has the path-integral form log pθ
+
+> 0
+
+(z0) ≥ ELBO [0 ,T ](θ; z0) = −
+
+Z T
+
+> 0
+
+Eqt|0(zt|z0)
+
+ X 
+
+> y̸=zt
+
+Φ
+
+ bQt(zt, y | z0), bQθt (zt, y )
+
+ dt. 
+
+CTMC path-space ELBOs of this kind have appeared in the continuous-time discrete diffusion literature, for example in the formulations of [CBDB +22, LME24, SHW +24, SAS +24, vRFD +25]. Our derivation is included not merely to recover the known training objective, but to keep the terms in a form suitable for studying the objective itself; Theorem 1 ( §4.3) is the precise finite-window statement. There are two reasons to revisit the derivation. First, many presentations discard model-independent terms of the ELBO because they do not affect optimization. This is natural when the goal is only to obtain a loss function, but it hides the information-theoretic structure of the objective. In this paper we keep these terms and show that they are not decorative: they identify the irreducible cost of the ELBO with the information destroyed by the forward process, and they lead to a path-space decomposition of what the reverse model is actually learning. Second, practical implementations rarely optimize the ideal full-interval objective without mod-ification. Endpoint behavior at t = 0 , T can be singular or numerically unstable, posterior ratios may have high variance, reconstruction and terminal-prior choices may be separated from the path loss, and Monte Carlo training often uses time windows or importance-sampling clocks. For these reasons one often truncates the interval to [ t1, t 2] ⊂ (0 , T ). Once this is done, however, the effect on the ELBO is no longer transparent: the boundary terms that were harmless in the full-interval or perfectly matched setting become essential for interpreting the objective as a likelihood bound. In this paper we prove that, under the light conditions of Theorem 1, the finite-window CTMC likelihood admits the bound ELBO [t1,t 2](θ; z0) := Eqt1|0(zt1 |z0)
+
+h
+
+log pθ 
+
+> 0|t1
+
+(z0 | zt1 )
+
+i
+
+− KL 
+
+
+
+qt2|0(· | z0) pθt2
+
+
+
+−
+
+Z t2
+
+> t1
+
+Eqt|0(zt|z0)
+
+ X 
+
+> y̸=zt
+
+Φ
+
+ bQt(zt, y | z0), bQθt (zt, y )
+
+ dt, 
+
+(ELBO) 6where pθ 
+
+> 0|t1
+
+is the reconstruction decoder and pθt2 is the terminal prior. In implementations, the same neural model that specifies the reverse rates often also provides this reconstruction head. This form of the ELBO is particularly useful because its inputs are the model reverse rate bQθ
+
+and the clean-conditioned reverse rate bQ(· | z0). The latter is easy to compute from the forward process itself: bQt(z, y | z0) = Qt(y, z ) qt|0(y | z0)/q t|0(z | z0) requires only the conditional forward kernels qt|0 and no knowledge of the data law pdata beyond samples z0. The object we ultimately want, however, is the marginal reverse rate bQt(z, y ) = Qt(y, z )qt(y)/q t(z), because only the reverse CTMC with these rates transports qT back to q0 = pdata .
+
+The difficulties interpreting the ELBO. The perceived drawback of the ELBO is that it is an inequality: it seemingly replaces the intractable likelihood by a computable bound, as reflected in its name. Indeed, taking expectation in (ELBO) with respect to Z0 ∼ q0 = pdata and subtracting the data entropy H(q0) = H(pdata ) from both sides gives a KL upper bound against pθ
+
+> 0
+
+, the model’s law at time zero, that is, the law of its generated samples: KL 
+
+
+
+pdata pθ
+
+> 0
+
+
+
+≤ − H(q0) − Eq0
+
+ELBO [t1,t 2](θ; z0).
+
+A metric which is a bound is hard to interpret. If two papers report different ELBO values, and the reported number is only an upper bound on a KL divergence with an unknown gap, it is not obvious whether a better value reflects a better generative law or only a tighter variational approximation. This is especially acute in domains such as text and music, where direct metrics on generated samples are difficult to define. There are also two structural questions specific to diffusion models. First, the ELBO trains bQθ
+
+through the local divergence Φ( bQt(· | z0), bQθt ), where the first argument is the clean-conditioned reverse rate, whereas generation requires the marginal reverse CTMC with rate bQt. What, then, is the population optimizer of the objective? Second, what is the best achievable value of the ELBO itself? In this paper, we answer these questions by identifying the ELBO with a path-space relative entropy, plus constants with direct information-theoretic meaning. 
+
+The Oracle Distance: NELBO = entropy + path KL to the oracle. The answer com-pares whole trajectories rather than time marginals. An endpoint law and a family of jump rates determine the law of the entire trajectory, its path law (§4.2), and two path laws matter here: 
+
+P ⋆ 
+
+> [0 ,T ]
+
+, the law of the noising trajectories themselves, read in reverse time as started at qT and run backward with the marginal reverse rates bQt; and P θ 
+
+> [0 ,T ]
+
+, the model’s, started at its terminal prior and run backward with bQθt . Indeed, direction is a property of the chosen factorization, an endpoint law and rates, not of the law itself: a process Markov in forward time is Markov in reverse time, with different rates, and P ⋆ simply is the noising law. In the clean full-interval setting, where the model starts at the correct terminal law qT and the endpoint terms vanish, we prove in §§ 4–5 that 
+
+−Eq0
+
+ELBO [0 ,T ](θ; z0) = H(q0) + KL 
+
+
+
+P ⋆  
+
+> [0 ,T ]
+
+P θ 
+
+> [0 ,T ]
+
+
+
+. (3) The significance is that the ELBO is not just an arbitrary tractable bound: after adding the entropy constant, it is exactly the path-space KL between the true and the learned reverse dynamics. We call this expression of the ELBO the Oracle Distance identity (Corollary 1, §5.1). In particular, KL 
+
+
+
+pdata pθ
+
+> 0
+
+
+
+≤ KL 
+
+
+
+P ⋆  
+
+> [0 ,T ]
+
+P θ 
+
+> [0 ,T ]
+
+
+
+= −H(q0) − Eq0
+
+ELBO [0 ,T ](θ; z0) ,
+
+7because marginalization cannot increase relative entropy. This explains why optimizing the ELBO is powerful: it makes the learned reverse path law follow the true reverse path law. It also shows the limitation of the metric: the path-law KL can be substantially larger than the endpoint KL between generated samples and data, so the ELBO may penalize pathwise discrepancies that are not fully visible at the final sample level (we expand on this point later in §2.2). The same identity has a clipped-window version (Theorem 3, §5.1): training on [ t1, t 2] ⊂ (0 , T )with a model terminal prior pθt2 and a model final decoder pθ 
+
+> 0|t1
+
+gives 
+
+−Eq0
+
+ELBO [t1,t 2](θ; z0) = H(q0) + KL 
+
+
+
+P ⋆ 
+
+> [t1,t 2]
+
+P θ
+
+> [t1,t 2]
+
+
+
++ Eqt1
+
+h
+
+KL 
+
+
+
+q0|t1 (· | zt1 ) pθ 
+
+> 0|t1
+
+(· | zt1 )
+
+i 
+
+.
+
+(4) The reconstruction mismatch at t1 sits outside of the path KL, while the usual terminal-prior mismatch KL  qt2 pθt2
+
+ sits inside it: by the finite-state Girsanov formula (Theorem 2, §4.3), a KL between path laws always contains the KL between their laws at the starting time, here t2, plus an integral of local rate divergences, KL 
+
+
+
+P ⋆ 
+
+> [t1,t 2]
+
+P θ
+
+> [t1,t 2]
+
+
+
+= KL 
+
+
+
+qt2 pθt2
+
+
+
++
+
+Z t2
+
+> t1
+
+Eqt
+
+hP  
+
+> y̸=zt
+
+Φ  bQt(zt, y ), bQθt (zt, y )i
+
+dt. 
+
+In this sense, the theorem reveals what the CTMC ELBO actually is. 
+
+The optimizer is a reverse-rate projection. The optimizer is now an almost trivial corollary: the path KL in (3) or the clipped-window version (4) is non-negative and vanishes exactly when the model runs the true marginal reverse rates, so among all rates measurable with respect to the noisy state Zt only, the optimum is exactly the true reverse marginal rate bQt(zt, y ): 
+
+bQθ⋆ t (zt, y ) = E
+
+h bQt(Zt, y | Z0) Zt = zt
+
+i
+
+= bQt(zt, y ), y̸ = zt. (5) 10 −2 10 −1 10 0̂
+
+Qt(zt, y ) = q(z0 | zt)[̂Qt(zt, y | z0)] 
+
+10 −2
+
+10 −1
+
+10 0̂
+
+> Qθt (zt, y )
+
+y = x
+
+Figure 1: The model rates bQθt (zt, y ) from a trained uniform-diffusion denoiser neural network, sampled across many ( zt, y, t ), average to the oracle rate bQt(zt, y ) = Eq(z0|zt)
+
+h bQt(zt, y | z0)
+
+i
+
+.8The middle expression, which equals the marginal rate by a short Bayes computation (Theorem 5, 
+
+§5.2), is what gives the optimum its meaning: although the training target is clean-conditioned, its projection onto the information available to the model is exactly the unconditional reverse rate needed for generation (Figure 1). 
+
+The irreducible cost is information loss. The entropy constant in (3) is not mere book-keeping; it has a precise information-theoretic origin. Evaluated at the oracle reverse rate bQt,the per-time ELBO cost that remains is exactly the rate at which the forward process destroys information about the data, 
+
+J ⋆t := EZ0,Z t
+
+ X 
+
+> y̸=Zt
+
+Φ
+
+ bQt(Zt, y | Z0), bQt(Zt, y )
+
+ = ddt H(Z0 | Zt) = − ddt I(Z0; Zt) ≥ 0,
+
+the CTMC counterpart of the I-MMSE relation between estimation and information (Theorem 4, 
+
+§5.1). Integrated over the schedule this telescopes to the total information the data carries, the data entropy H(Z0) = H(pdata ) (Figure 2). 
+
+A Pythagorean split. The two previous facts combine into a proof of the Oracle Distance (3). For any model rate, the per-time trained cost separates exactly, with no cross term, into what the oracle pays plus how far the model’s rates are from the oracle’s (a Bregman property of Φ; 0.0 0.2 0.4 0.6 0.8 1.0 
+
+diffusion time t 
+
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> 1.2
+> 1.4
+> H(Z0 | Zt)/L
+> H(q0)/L = 1 .25
+> masked
+> uniform
+
+clean noisy 
+
+(a) Same total      
+
+> 0.0 0.2 0.4 0.6 0.8 1.0
+
+diffusion time t 
+
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> 2.5
+> Jt = ddt  H(Z0 | Zt) uniform masked
+
+clean noisy 
+
+(b) Opposite schedule    
+
+> GIDD λ
+> H(q0)/L
+> total area
+> ∫10
+> Jtdt
+> 0.0
+> 0.5
+> 1.0
+> GIDD  λ
+
+Figure 2: Every noising process destroys exactly H(q0) information, at its own rate, computed at the exact oracle on the GIDD family ( §8) that interpolates masked and uniform diffusion through the parameter λ. (a) Information destroyed by time t, H(Z0 | Zt)/L , follows different paths to the common ceiling H(q0)/L (Theorem 4, §5.1). (b) Its rate J ⋆t = ddt H(Z0 | Zt): uniform destroys information earlier than masked, with equal area (inset). 9Proposition 2, §5.1): 
+
+EZ0,Z t
+
+hP  
+
+> y̸=Zt
+
+Φ  bQt(Zt, y | Z0), bQθt (Zt, y )i| {z }
+
+> trained cost
+
+= J ⋆t
+
+|{z} 
+
+> oracle cost
+
++ EZt
+
+hP  
+
+> y̸=Zt
+
+Φ  bQt(Zt, y ), bQθt (Zt, y )i| {z }
+
+> model–oracle rate divergence
+
+.
+
+Integrating over time, the oracle cost telescopes to the data entropy H(q0) by the information-loss identity above, while the model–oracle divergence accumulates into the path KL: this is the identity. 
+
+A universal entropy floor. The same result also identifies the intrinsic floor of the ELBO. Since the path-law KL in (3) is non-negative and vanishes exactly at the true marginal reverse dynamics, for a model class expressive enough to realize them, we get inf  
+
+> θ
+
+−Eq0
+
+ELBO [0 ,T ](θ; z0) = H(pdata ). (6) 0 2000 4000 6000 8000 
+
+training step 
+
+> 10 −2
+> 10 −1
+> 10 0
+> NELBO  − H(q0)
+
+(a) excess = path KL     
+
+> denoiser
+> cavity
+> score
+> empirical
+> theory
+> 02000 4000 6000 8000
+
+training step 
+
+> 10 −2
+> 10 −1
+> 10 0
+> NELBO  − H(q0)
+
+(b) GIDD family      
+
+> 0.0 0.2 0.4 0.6 0.8 1.0
+
+diffusion time t 
+
+> 0
+> 1
+> 2
+> 3
+> path density  Jt
+> clean noisy
+
+(c) the excess over t  
+
+> floor Jt
+> model Jθt
+> 0.0
+> 0.5
+> 1.0
+> GIDD  λ (masked  → uniform)
+
+Figure 3: The NELBO is an exact distance to the oracle (Corollary 1, §5.1). Panels (a,b) plot the per-token excess NELBO( θ) − H(q0): it vanishes over training for every parameterization (panel 
+
+(a) ; UDM denoiser, cavity, and score networks from §2.2) and every noising process (panel (b) ;GIDD family with cavity network). (c) The Pythagorean split over diffusion time t: the per-time cost is the oracle rate J ⋆t plus the model–oracle divergence, whose integral is the path KL. 10 Thus the best achievable value is not an artifact of the particular noising process or parameteriza-tion; it is the data entropy (Figure 3). Lemma 3 and Corollary 3 ( §5.4) give the formal statements, and Figure 7 shows the boundary-term decomposition summing to this floor. The ELBO has a universal entropy floor, and the excess above that floor measures pathwise mismatch to the true reverse process. 
+
+Training clocks and the information-uniform time. In practice the path integral in (ELBO) is estimated by Monte Carlo over t and zt ∼ qt|0(· | z0), optionally with an importance density pIS (t)for variance reduction; choosing pIS is the same as choosing the clock on which the reverse chain is run ( §4.4). Beyond the variance-optimal choice, one clock is intrinsic to the process : since the oracle cost rate is J ⋆t = ddt H(Z0 | Zt) (Theorem 4), the clock τ (t) = H(Z0 | Zt)/H (q0) drains information linearly , I(Z0; Zτ ) = (1 − τ ) H(q0), and straightens the otherwise process-dependent curves of Figure 2a onto a single diagonal. 
+
+2.2 Discrete diffusion for sequential data 
+
+Discrete diffusion is most often applied to sequence modeling, broadly any multi-dimensional data such as text, images, music, or graphs. However, a practitioner immediately meets three apparently different ways to parameterize the model: predict the clean token directly (a denoiser ); the bridge plug-in trick, widely assumed to be an equivalent way of training that same denoiser (it is not); or predict a ratio of noisy conditionals (a concrete score ). Folklore holds that some of these mysteriously misbehave, and indeed the uniform-diffusion ELBO can diverge at initialization. This section resolves the confusion with the central guiding principle we just introduced in the previous section: all three are coordinates of one object, the true reverse rate that the ELBO optimizes. Choosing a parameterization is just choosing which coordinates of that object to learn. Using this one fact we give an answer to several open practical questions: what is the dictionary that converts between the three parameterizations, why a denoiser model fed to a cavity sampler silently trains a different law under uniform but not masked diffusion, what it would take to improve on masked diffusion, and it also provides calibration checks that run at initialization, among others. 
+
+Sequences as product spaces. Sequential data lives on a product space (§6), whose (high-order) positional correlations are exactly the structure generative models aim to capture. We index the L
+
+positions by 1 ≤ i ≤ L and work on the finite product state space 
+
+X := X1 × · · · × X L.
+
+To exploit this structure, the standard choice is a noising process that factors across positions 
+
+(Theorem 6, §6.1): each position is corrupted independently, so for times s < t the forward kernel is 
+
+qt|s(y | x) := 
+
+> L
+
+Y
+
+> i=1
+
+qit|s(yi | xi), x, y ∈ X ,
+
+where xi is the i-th coordinate, x−i := ( xj )j̸ =i the remaining coordinates, and qit|s the forward kernel on Xi. Equivalently, by the Kolmogorov forward equation, the generator factors additively ,
+
+Qt(x, y ) = 
+
+> L
+
+X
+
+> i=1
+
+(Qt)i(x, y ), (Qt)i(x, y ) = 1{x−i = y−i} Rit(xi, y i), (7) 11 so jumps occur one coordinate at a time, at a rate Rit. Nothing forces the per-position processes to be equal, though they usually are. This factorization into token-wise jump rates is what makes both training and the standard marginal-based sampling tractable, as we now show. Like the left-to-right factorization of autore-gressive models, this choice trades a (hopefully mild) loss of expressivity for tractability. 
+
+From sequence rates to token rates. The payoff of factorization is that the whole reverse process is fixed by token marginals alone, never full-sequence laws. To see it, we compute the true reverse rate of Theorem 5 for the clean-conditioned positional rates, averaging over q(z0 | zt), and cancelling the non-i factors, to get ( bQt)i(zt, y ) = E
+
+h
+
+( bQt)i(Zt, y | Z0) Zt = zt
+
+i
+
+= Rit(yi, z it) Eq(zi
+
+> 0|zt)
+
+" qit|0(yi | zi
+
+> 0
+
+)
+
+qit|0(zit | zi
+
+> 0
+
+)
+
+#
+
+. (8) The reverse rates therefore depend on the data only through the clean-token marginals q(zi 
+
+> 0
+
+| zt), which is our first key insight for sequence modeling and is formalized as the denoiser coordinate in Theorem 7 ( §6). The literature typically posits a token-level parameterization on the strength of factorizability; deriving it through the projection result instead shows what that factorization buys (the dependence on data through those clean-token marginals alone) and thereby which token-level choices affect the optimized law and which are immaterial. 
+
+Existing parameterizations and open questions. The marginal q(zi 
+
+> 0
+
+| zt) is the familiar 
+
+denoiser , which we denote by π⋆i : the i-th clean-token law given the current noisy sequence, 
+
+π⋆i (zi 
+
+> 0
+
+| zt, t ) := q(zi 
+
+> 0
+
+| zt).
+
+The standard recipe, known as the mean parameterization, fits a neural network head πθi ≈ π⋆i ,plugs it into (8) to obtain rates bQθt , and feeds those to the ELBO of Theorem 1; it is commonly read as the “average reverse rate” under the denoiser’s uncertainty. Reverse sampling then factors the step through the same head, 
+
+pθs|t(zs | zt) = 
+
+> L
+
+Y
+
+> i=1
+
+pθ(zis | zt), pθ(zis | zt) = Eπθi (zi
+
+> 0|zt,t )
+
+h
+
+qis|t, 0(zis | zit, z i
+
+> 0
+
+)
+
+i
+
+, (9) even though the true law qs|t cannot factor over positions: if it did, the clean-data law q(z0) = 
+
+q(z0 | zT ) (by terminal mixing, Assumption 1) would factor too, giving a pure unigram model. This recipe works for masked diffusion but fails for uniform diffusion, where the ELBO diverges at initialization. Uniform-diffusion (UDM) and generalized-interpolating (GIDD) works instead adopt the bridge plug-in parameterization, in which the forward kernel qit|0 is averaged over the network’s output distribution before forming the rate (1), and surprisingly this keeps the ELBO finite and allows smooth training. A third route, that of concrete scores , instead reads the head as ratios of noisy conditional laws. These options raise the central questions we answer next: how are the three related, are they interchangeable, why does one of them sometimes fail, and what reverse CTMC does each actually induce? 12 Three coordinates, one object. The answer lies in the ELBO’s unique optimizer, the uncon-ditional reverse rate of Theorem 5, because we can rewrite (8) in terms of true laws other than the denoiser. The bridge plug-in turns out to target the cavity law μ⋆i , namely the i-th clean-token law given the context z−it but ignoring its own noisy observation zit,
+
+μ⋆i (zi 
+
+> 0
+
+| z−it , t ) := q(zi 
+
+> 0
+
+| z−it ),
+
+while the concrete score s⋆i targets a ratio of noisy conditional laws, 
+
+s⋆i (zit, y i | z−it , t ) := qt(yi, z −it )
+
+qt(zt) ,
+
+where ( yi, z −it ) denotes the sequence zt with its i-th token replaced by yi. Our second contribution makes this picture exact by identifying three exact and equivalent expressions for the token-wise true reverse rates ( bQt)i, which together form a coordinate dictionary ,( bQt)i(zt, y ) = Rit(yi, z it) Eπ⋆i (·| zt,t )
+
+" qit|0(yi | · )
+
+qit|0(zit | · )
+
+#
+
+(48), denoiser = Rit(yi, z it)
+
+Eμ⋆i (·| z−it ,t )
+
+h
+
+qit|0(yi | · )
+
+i
+
+Eμ⋆i (·| z−it ,t )
+
+h
+
+qit|0(zit | · )
+
+i (49), cavity = Rit(yi, z it) s⋆i (zit, y i | z−it , t ) (50), score. 
+
+Denoiser 
+
+π⋆i (zi 
+
+> 0
+
+| zt) := q(zi 
+
+> 0
+
+| zt)
+
+> MDLM, D3PM, MD4
+
+Cavity 
+
+μ⋆i (zi 
+
+> 0
+
+| z−it ):= q(zi 
+
+> 0
+
+| z−it )
+
+> UDLM, GIDD, Duo
+
+Score 
+
+s⋆i (zit, y i | z−it ):= qt(yi, z −it )
+
+qt(zt)            
+
+> SEDD, RADD, TCSM
+> local Bayes update
+> π⋆i∝μ⋆iqit|0(zit| · )
+> compose via cavity
+> ratio of cavity-averaged kernels
+> s⋆i=
+> Ezi
+> 0∼μ⋆i
+> h
+> qit|0(yi|zi
+> 0)
+> i
+> Ezi
+> 0∼μ⋆i
+> h
+> qit|0(zit|zi
+> 0)
+> i
+> linear in μ⋆i: invert qit|0
+> and normalize to go back
+
+True reverse rate         
+
+> (bQt)i(zt, y )=E
+> h
+> (bQt)i(Zt, y |Z0)Zt=zt
+> i
+
+Figure 4: The reverse rate in three coordinates: each vertex lists a coordinate of the reverse rate, the law it learns (omitting the time conditioning from the notation), and the methods it recovers; each arrow names its conversion formula, with arguments suppressed (Proposition 3, §6.1). 13 To read these off: the denoiser line averages the forward-kernel ratio qit|0(yi | · )/q it|0(zit | · ) over the clean token zi 
+
+> 0
+
+∼ π⋆i ; the cavity line takes a ratio of the cavity-averaged kernels Eμ⋆i
+
+h
+
+qit|0(· | zi
+
+> 0
+
+)
+
+i
+
+; and the score is already that reweighting and enters raw. All three agree at the oracle laws, which is exactly the dictionary. But averaging the ratio (denoiser) and taking the ratio of averages (cavity) are different operations on a learned head, which is why the denoiser/cavity distinction bites for uniform yet vanishes for masked diffusion (next paragraph). Fitting a head to each yields a different parameterization, and each is a complete specification of the generative process, since substituting a coordinate into the rate fixes the reverse jump rates and, by the Kolmogorov forward equation, those rates in turn determine the reverse CTMC in full. Figure 4 gathers the three coordinates: the oracle law each one learns, the literature methods it recovers, and the closed-form conversions between them. Because all three coordinates target the same oracle object, namely the unique optimum of the den. cav. score       
+
+> read as
+> den.
+> cav.
+> score
+> head
+> 1.25 1.25 1.25
+> 1.25 1.25 1.25
+> 1.25 1.25 1.25
+
+(a) correct conversion         
+
+> den. cav. score
+> read as
+> den.
+> cav.
+> score
+> head
+> 1.25 2.02 7.24
+> 2.42 1.25 6.41
+> 2.62 1.33 1.25
+
+(b) naive misread   
+
+> 0.0 0.5 1.0
+
+GIDD λ
+
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> NELBO penalty
+
+(c) zero at masked         
+
+> den. cav. score
+> read as
+> den.
+> cav.
+> score
+> head
+> 3.51 3.51 3.51
+> 3.51 3.51 3.51
+> 3.51 3.51 3.51
+
+(d) correct conversion         
+
+> den. cav. score
+> read as
+> den.
+> cav.
+> score
+> head
+> 3.51 14.77 34.90
+> 8.44 3.51 33.39
+> 9.94 4.60 3.51
+
+(e) naive misread   
+
+> 0.0 0.5 1.0
+
+GIDD λ
+
+> 0
+> 2
+> 4
+> 6
+> 8
+> 10
+> 12
+> gen-PPL penalty
+
+(f) zero at masked 
+
+> 0
+> 2
+> 4
+> NELBO −H(q0)/L
+> 0
+> 10
+> 20
+> 30
+> |gen-PPL −true |
+> 0.0
+> 0.5
+> 1.0
+> GIDD  λ (masked  → uniform)
+> 0.0
+> 0.5
+> 1.0
+> GIDD  λ (masked  → uniform)
+
+Figure 5: Reading the exact reverse rate held in coordinate A (row) as coordinate B (column). Top, per-token NELBO: (a) with the closed-form conversion (Figure 4, Table 2) every cell equals the floor H(q0)/L ; (b) the naive misread penalizes every off-diagonal. Bottom, generative perplexity 
+
+(ancestral sampling, exact oracle laws): (d) every correct conversion reaches oracle performance; 
+
+(e) off-diagonals penalized. (c,f ) Sweeping the GIDD weight λ, the denoiser/cavity penalty grows continuously from zero at masked, where the two coordinates coincide. 14 ELBO, each head πθi , μ θi , s θi is optimized exactly at π⋆i , μ ⋆i , s ⋆i , uniquely up to identifiability of the head-to-rate map. 
+
+Why masked diffusion is special. The link between π⋆i and μ⋆i is simple: the denoiser is the cavity reweighted by the local forward kernel qit|0(zit | zi
+
+> 0
+
+), 
+
+π⋆i (zi 
+
+> 0
+
+| zt, t ) ∝ μ⋆i (zi 
+
+> 0
+
+| z−it , t ) qit|0(zit | zi
+
+> 0
+
+).
+
+Thus, the forward kernel qit|0(zit | zi
+
+> 0
+
+) is exactly the Bayes update for observing the local token zit on top of the context z−it . This splits the mutual information between zi 
+
+> 0
+
+and zt into two parts: what the context z−it reveals (the cavity μ⋆i , which must be learned), and what the local token zit adds (the forward kernel weight, available analytically). A denoiser head must reproduce both of these, which is a concrete source of its training difficulty. Masked diffusion escapes the distinction entirely, because at a masked token the local observation is uninformative and thus qit|0(m | · ) constant, so that π⋆i = μ⋆i , that is, the denoiser and cavity coincide in masked diffusion (Corollary 4, §7). We show the importance of this distinction in Figure 5. 
+
+Two sources of modeling bias. The framework cleanly separates the two sources of error in a discrete-diffusion model. The first is reverse-rate error, the gap between the model rate and the true reverse jump rate, which is exactly what the ELBO measures, by the Oracle Distance Theorem 3. The second is sampling factorization error and is invisible to the ELBO. The trajectory drift noted above is not a third source: it is the same reverse-rate error, incurred now at the model’s own self-generated states rather than at the true (teacher-forced) states the ELBO scores; in the well-specified, sufficient-capacity limit the learned rate is correct at every state and no drift occurs, so drift is a generalization gap rather than an objective mismatch ( §9). Factorization error, by 10 0 10 1 10 2
+
+> sampling steps (NFE)
+> 3.5
+> 4
+> 5
+> 6
+> 8
+> 10
+> 15
+> 20
+> 30
+> 40
+> gen. perplexity
+> true PPL
+> masked
+> uniform
+> GIDD
+
+Figure 6: Sampling with the exact oracle denoiser and the factorized ancestral samplers of §7 zeroes the reverse-rate error, so the excess of the generative perplexity is pure sampling error, which even the oracle rates incur. It vanishes only as the sampling budget grows, masked being penalized more due to its inability to self-correct. 15 2 4 8 16 32 64  
+
+> vocabulary V
+> 0
+> 1
+> 2
+> 3
+> 4
+> per-token NELBO
+
+(a) Cavity 1 /V : NELBO = log V        
+
+> path ( t2=0 .6)
+> path ( t2=0 .8)
+> path ( t2=0 .95)
+> boundary
+> prediction log V
+> 2468
+> log(1 /β t1)
+> 2
+> 4
+> 6
+> 8
+> 10
+> 12
+> path NELBO
+> masked
+
+(b) Denoiser 1 /V diverges        
+
+> slope ( V−1) /V
+> V= 4
+> V= 8
+> V= 16
+> V= 32
+> V= 64
+> masked uniform GIDD
+> 0.00
+> 0.25
+> 0.50
+> 0.75
+> 1.00
+> 1.25
+> 1.50
+> nats / token
+> H(q0)/L
+
+(c) recon + path + prior   
+
+> recon. path prior
+
+Figure 7: (a) A cavity head μθi ≡ 1/V has per-token NELBO log V once boundary terms are kept (Proposition 4). (b) The same head read as a denoiser makes the uniform NELBO diverge, linearly in log(1 /β t1 ) with slope V −1 
+
+> V
+
+(Proposition 6), while masked stays finite. (c) The oracle NELBO splits as reconstruction + path + terminal prior, summing to the same H(q0) for any noising process (Corollary 3; the window [0 .1, 0.9] exaggerates the boundary terms). contrast, persists even when the reverse-rate error is exactly zero. The literature uses various small-time sampling schemes (Euler, τ -leaping, Tweedie), but rarely makes the sequence-to-token derivation explicit, even though the sampling gap is exactly the factorization bias. All such schemes rest on the same fact, namely that over a short step [ s, t ] the rates ( bQt)i(zt, y ) can be treated as constant up to O(t − s) terms, and under that approximation the unconditional reverse rate factors 
+
+exactly , so the factorized ancestral sampler is justified. Figure 6 isolates this factorization error: even an oracle with zero reverse-rate error degrades at few-step sampling. 
+
+Calibration at initialization. The framework also yields calibration identities at initialization, for an uninformative head 1 /V . First, a cavity 1 /V head has per-token NELBO log V (Proposi-tion 4, §6), which provides a useful debugging tool, whereas a denoiser 1 /V head instead makes the uniform-diffusion NELBO diverge (Proposition 6, §7); both identities are confirmed numerically in Figure 7. This divergence also pinpoints when denoisers are hard to train: whenever placing mass on the “wrong” token near the clean endpoint t1 creates singular quotients qit|0(yi | zi
+
+> 0
+
+)/q it|0(zit | zi
+
+> 0
+
+), which is precisely UDM’s failure mode. 
+
+Practical takeaways. The framework reduces to a few concrete rules for the practitioner. 
+
+• Match the neural network head during sampling to its training loss, or convert. 
+
+A head is optimized by the law its loss targets; feed a cavity head into a denoiser sampler and one is missing the analytic Bayes update (42). 
+
+• Avoid a raw denoiser head for uniform and GIDD. Its ELBO diverges at initial-ization (Proposition 6); use the cavity (bridge plug-in) coordinate, which stays finite and well-calibrated. 16 • Use the log V identity as a calibration and debugging tool. A cavity 1 /V head has per-token NELBO log V independently of the diffusion process and the training endpoints [t1, t 2], after including the boundary terms. 
+
+• Keep the boundary terms. The reconstruction and terminal-prior KL terms are required for ELBOs to be comparable across processes; dropping them, as is common, silently breaks such comparisons. 
+
+Instantiations: masked, uniform, GIDD. Section §7 instantiates the framework on the three standard processes. We do so by showing that GIDD’s ELBO is really a generic cavity ELBO, valid for any source-independent rate, with a closed-form integrand given by a KL plus an Itakura–Saito term (Proposition 5). Specializing it recovers the masked, uniform, and GIDD integrands, and the score coordinate likewise re-derives the results of SEDD and RADD in a few steps; the cavity optimality of the UDM bridge plug-in observed by [GJS +26] follows as one special case (see §3). Table 5 collects the resulting formulas, including the prior boundary terms that are usually dropped in the literature but are needed to compare ELBOs across methods. 
+
+# 3 Background and related work 
+
+Discrete diffusion and its continuous-time form. Discrete diffusion originates with multi-nomial and structured categorical corruption processes [HNJ +21, AJH +21], the discrete analogue of the Gaussian diffusion line [SDWMG15, HJA20], and now scales to large language models [NZY +25]. Campbell et al. [CBDB +22] cast discrete diffusion as a continuous-time Markov chain (CTMC) with exact forward and reverse rates and a continuous-time variational bound, later extended by score-based [SYD +23, LME24] and flow-based [GRS +24, CYB +24] formulations, and general-ized to broad classes of Markov processes by denoising Markov models [BSDB +24] and Generator Matching [HHY +25]. Section §4 is a self-contained re-derivation of the CTMC ELBO building on [CBDB +22], with the reconstruction and terminal-prior boundary terms and the rate-support and regularity conditions made explicit, and with two derivations (an infinitesimal-KL argument and a Girsanov argument, Theorem 2). Existing discrete formulations absorb the boundary terms into model-independent constants or send them to zero with T → ∞ [CBDB +22, LME24, SAS +24, JSJN25], which makes reported ELBOs incomparable across noising processes as implemented; we keep them explicit throughout, which is what enables the cross-process calibration results of §6. To our knowledge, no discrete-diffusion work states the exact identity, with boundary terms, for arbi-trary model rates. Other insights from our framework, such as the equivalence between importance sampling and the process’ time parameterization, connect to likelihood-faithful versus reweighted diffusion objectives [KSPH21, ND21, ST25, RNB +26]. 
+
+Reverse-process parameterizations. The learned reverse process is parameterized in several ways: as a denoiser [AJH +21, HNJ +21, CBDB +22, SAS +24, SHW +24], as a concrete score [MCSE22, SYD +23, LME24, ONX +25, ZZZ +25], or as a leave-one-out or cavity law [vRFD +25, GJS +26, SSP +25, SDG +25, SLY +26], with the masked ELBO reducing to weighted cross-entropy [SHW +24, SAS +24, ZYYK24]. Two recent frameworks unify subsets of these: Generator Matching [HHY +25] regresses a marginal Markov-process generator, and Target Concrete Score Matching [ZZZ +25] unifies training objectives through the target concrete score, recovering several existing masked 17 and score-based objectives as special cases. Generator Matching in particular already contains, at the level of matching objectives, two ingredients we use: the marginal generator as a posterior average of conditional generators, and Bregman divergences as the loss class whose conditional and marginal forms share gradients (their Propositions 1–2). What it does not provide that we do is the likelihood side: the exact CTMC NELBO, boundary terms included, is such a Bregman ob-jective for Φ, so the projection optimum is the maximum-ELBO reverse process, the excess above the oracle is a path KL, and the irreducible part is the information-destruction rate. Section §6is complementary at the parameterization level: rather than a single objective, we give an explicit 
+
+coordinate dictionary of the reverse rate for all denoiser, cavity, and score parameterizations, with exact conversion formulas, and identify which coordinate each literature loss optimizes. Prior work often blurs the position- versus sequence-level distinction and reads one network in another’s sam-pler without converting, the score line [LME24, ONX +25] and the independent uniform-diffusion analysis of [GJS +26] being the closest exceptions. 
+
+The denoiser-versus-leave-one-out distinction. Concurrently and independently, Gourevitch et al. [GJS +26] have recently observed for the special case of uniform diffusion (UDM) that the bridge plug-in is optimized by a leave-one-out (cavity) law rather than the standard denoiser, de-riving denoiser/leave-one-out/score conversions for UDM that they use to improve UDM training and sampling. Our work obtains this result by a different route that places it within a general product-CTMC treatment. The Oracle Distance Theorem 3 and the reverse-rate projection it in-duces characterize the denoiser, cavity, and score optima, and their conversion formulas, for every 
+
+token-factorizable noising process from a single projection principle. Our framework also explains exactly when and why the coordinates differ and when a denoiser parameterization makes the ELBO ill-posed, with explicit divergence rates for UDM (Proposition 6) that give a theoretical account of the leave-one-out advantage that Gourevitch et al. document empirically. Furthermore, their empirical gains on text modelling provide strong evidence that distinctions such as the ex-act reverse-rate process and oracle law being optimized are far from purely academic and have a measurable effect on discrete diffusion modeling. 
+
+Information-theoretic view. The irreducible ELBO cost we identify with ddt H(Z0 | Zt) = 
+
+− ddt I(Z0; Zt) is the CTMC instance of estimation–information identities: the Gaussian I-MMSE re-lation [GSV05], its jump-rate analogue whose natural loss is exactly our jump divergence Φ [AW12], the information-theoretic reading of the continuous diffusion ELBO [KBVS23], and the discrete I-MDSE/I-MDCE relations of [JSJN25], which they state at the oracle in the score coordinate for general rate matrices and in the cross-entropy coordinate for masked diffusion, with T → ∞ . Our identities extend the latter along three axes: from the oracle to arbitrary model rates (the ex-cess being exactly a path KL), to every coordinate of any token-factorizable process, and to finite windows with explicit boundary terms. The conditional-mean optimality and Pythagorean de-composition are special cases of [BGW05], the jump-rate counterpart of the denoiser/cavity/score identities in continuous diffusion [Vin11]. Because squared error is itself the Bregman divergence of F (u) = 12 ∥u∥2 and Φ that of F (u) = u log u − u, these identities are not merely parallel: the Gaussian I-MMSE and our CTMC case are two instances of one Bregman representation of the information loss. 18 4 A continuous-time discrete diffusion framework 
+
+The proofs in this and the following sections follow one recurring pattern: identify the exact reverse Markov process, then ask what part of it a model can represent. The variational step to deduce the ELBO bound is standard after realizing that a diffusion model is a VAE whose latent is the noising trajectory; in continuous time the discrete sum of bridge-kernel KLs becomes a path integral of local jump-rate divergences Φ( bQt(zt, y | z0), bQθt (zt, y )), plus a reconstruction term at the lower endpoint and a terminal-prior term at the upper endpoint. This is the CTMC ELBO of Section §4.3, obtained either as a vanishing-mesh limit of the discrete-time ELBO or directly as the relative entropy between jump processes using Girsanov’s formula. The true bridge rate still depends on the hidden clean data Z0, whereas the learned reverse CTMC sees only the noisy state Zt. The ELBO therefore poses a local projection problem, whose minimizer among Zt-measurable rates is the posterior mean of the clean-conditioned rate: the marginal time-reversal of the forward process. Its oracle per-time ELBO cost is exactly the infor-mation the forward process destroys, ddt H(Z0 | Zt), and the Bregman–Pythagoras identity for Φ splits any model’s path cost into this irreducible term plus its mismatch to the oracle rate. With the two boundary terms, this yields the main result of Section §5: after subtracting the fixed data entropy H(q0) and up to the two endpoint terms, the negative ELBO (NELBO) is exactly the path-law KL from the oracle reverse CTMC to the learned one. The final sequence-modeling sections §§ 6–7 specialize this identity. For product noising pro-cesses, the forward generator changes one token at a time, so the oracle reverse rate decomposes into one-token jumps, expressible in three coordinates: a denoiser, a cavity law, or a concrete score. 
+
+4.1 Variational formulation of diffusion models 
+
+We begin with the variational identity underlying VAEs. Let pθ(z0, z 1) be a generative model for a finite data distribution z0 ∼ q0 on X and a latent variable z1 ∈ Z . Let q(z1 | z0) be an encoder satisfying q(z1 | z0) ≪ pθ(z0, ·) for every z0.The standard ELBO derivation starts from the marginal log-likelihood and applies Jensen’s inequality for the concave function log: log pθ
+
+> 0
+
+(z0) = log Eq(z1|z0)
+
+ pθ(z0, z 1)
+
+q(z1 | z0)
+
+
+
+≥ Eq(z1|z0)
+
+
+
+log pθ(z0, z 1)
+
+q(z1 | z0)
+
+
+
+:= ELBO( θ; z0). (10) The right-hand side is the evidence lower bound, which can be split as ELBO( θ; z0) = Eq(z1|z0)
+
+h
+
+log pθ(z0 | z1)
+
+i
+
+− KL 
+
+
+
+q(· | z0) pθz1
+
+
+
+.
+
+The two terms are the reconstruction log-likelihood and prior KL, respectively. Alternatively, the ELBO can be derived via the data processing inequality log q0(z0) − ELBO( θ; z0) = Eq1|0(z1|z0)
+
+
+
+log q(z0, z 1)
+
+pθ(z0, z 1)
+
+
+
+= KL 
+
+
+
+q(· | z0) pθ(· | z0)
+
+
+
++ log q0(z0) − log pθ
+
+> 0
+
+(z0)
+
+≥ log q0(z0) − log pθ
+
+> 0
+
+(z0).
+
+19 In particular, this shows that the gap in the ELBO inequality is exactly a KL divergence: log pθ
+
+> 0
+
+(z0) − ELBO( θ; z0) = KL 
+
+
+
+q(· | z0) pθ(· | z0)
+
+
+
+≥ 0.
+
+It measures the discrepancy between the encoding and model posterior latent laws. Diffusion models are VAEs whose latent variable is the noising trajectory. Fix z0 ∈ X and let 
+
+z0: N be a discrete-time Markov trajectory with N ≥ 1, initial law q0, and forward kernels qt|t−1.Then 
+
+q1: N |0(z1: N | z0) = 
+
+> N
+
+Y
+
+> t=1
+
+qt|t−1(zt | zt−1).
+
+The learned reverse-time model factors as 
+
+pθ(z0: N ) = pθN (zN )
+
+> N
+
+Y
+
+> t=1
+
+pθt−1|t(zt−1 | zt),
+
+and is also Markov in forward time. In the VAE interpretation, z1: N is the latent variable and pθN
+
+is its terminal prior. 
+
+Proposition 1 (Discrete-time diffusion ELBO) . Assume the KL terms below are well defined. Then 
+
+ELBO( θ; z0) = Eq1|0(z1|z0)
+
+h
+
+log pθ
+
+> 0|1
+
+(z0 | z1)
+
+i
+
+− KL 
+
+
+
+qN |0(· | z0) pθN
+
+
+
+−
+
+> N
+
+X
+
+> t=2
+
+Eqt|0(zt|z0)
+
+h
+
+KL 
+
+
+
+qt−1|t, 0(· | zt, z 0) pθt−1|t(· | zt)
+
+i 
+
+. (11) 
+
+Moreover, 
+
+log pθ
+
+> 0
+
+(z0) − ELBO( θ; z0) = KL 
+
+
+
+q1: N |0(· | z0) pθ 
+
+> 1: N|0
+
+(· | z0)
+
+
+
+≥ 0.
+
+Proof. We start with the VAE ELBO equality with latent variable z1: N and use the reverse-model factorization above together with the reverse factorization 
+
+q1: N |0(z1: N | z0) = qN |0(zN | z0)
+
+> N
+
+Y
+
+> t=2
+
+qt−1|t, 0(zt−1 | zt, z 0)to obtain ELBO( θ; z0) = Eq1: N |0(z1: N |z0)
+
+
+
+log pθ(z0: N )
+
+q1: N |0(z1: N | z0)
+
+
+
+= Eq1: N |0(z1: N |z0)
+
+"
+
+log pθN (zN ) QNt=1 pθt−1|t(zt−1 | zt)
+
+qN |0(zN | z0) QNt=2 qt−1|t, 0(zt−1 | zt, z 0)
+
+#
+
+.
+
+Splitting the logarithm into boundary and transition terms gives (11). The gap identity is the corresponding VAE identity with latent variable z1: N .20 4.2 CTMC formulation 
+
+We now specialize the trajectory latent to a continuous-time Markov chain; see [Nor97, JS03, Br´ e81] for standard textbook references. 
+
+Notation. A single letter q or p denotes the finite-dimensional marginals, kernels, and bridges of a process, with subscripts recording the relevant times: qt is the time-t marginal, qt|s the transition kernel for times s < t , qt|0(· | z0) the forward kernel from clean data, and qs|t, 0(· | zt, z 0) the bridge. We often identify a random variable with its value and drop the event when it is clear, writing 
+
+q(z0 | zt) for q(Z0 = z0 | Zt = zt). Jump rates take Q, R , and sometimes a, b : Qt is the forward generator, a hat bQt denotes time reversal. We abbreviate “almost every” and “almost surely” for a probability measure μ as μ-a.e. and 
+
+μ-a.s., for properties that hold on a set of probability 1. For two laws μ, ν , absolute continuity 
+
+μ ≪ ν means ν(A) = 0 ⇒ μ(A) = 0. On finite state spaces this is simply support inclusion supp μ ⊆ supp ν, and the associated relative density (the Radon–Nikodym derivative) dμ/dν is the likelihood ratio. We use H(Z) = − P 
+
+> z
+
+p(z) log p(z) for the entropy of a discrete variable Z and 
+
+I(X; Y ) = KL( pX,Y ∥ pX pY ) = H(X) − H(X | Y ) for the mutual information between X and Y .
+
+CTMC processes and their generators. Let X be finite and 0 < T , possibly T = ∞. Acontinuous-time discrete diffusion is a continuous-time Markov chain (CTMC) ( Zt)t∈[0 ,T ] on X
+
+whose law is fixed by a time-dependent rate matrix (generator) Qt, with 
+
+Qt(x, y ) ≥ 0 (x̸ = y), Qt(x, x ) = − X 
+
+> y̸=x
+
+Qt(x, y ),
+
+so that each row sums to zero. The off-diagonal entry Qt(x, y ) is the instantaneous rate of the jump 
+
+x → y: the transition kernel 
+
+qt|s(y | x) = P(Zt = y | Zs = x)satisfies, as h ↓ 0, 
+
+qt+h|t(y | x) = δ(x, y ) + h Q t(x, y ) + o(h).
+
+While the chain is in a given state x, the time until the next jump is exponentially distributed with rate −Qt(x, x ), i.e., P(Zt = x, ∀t ∈ [s, u ] | Zs = x) = exp( R us Qt(x, x ) dt ). Conditional on a jump from x occurring at time t, the probability of destination y̸ = x is proportional to Qt(x, y ), i.e., P(Zt+ = y | Zt = x, Z t+̸ = x) = Qt(x, y )/(−Qt(x, x )). Sample paths are right-continuous and piecewise constant. 
+
+Kolmogorov equations. Arranged as matrices with normalized rows, the kernels obey Chapman– Kolmogorov qu|s = qt|squ|t and the forward and backward linear ODEs 
+
+∂tqt|s = qt|sQt, ∂sqt|s = −Qsqt|s, qs|s = I. 
+
+In particular, with q0 given, the marginal qt solves ∂tqt = qtQt, that is, ∂tqt(y) = P 
+
+> x
+
+qt(x)Qt(x, y ). By the uniqueness of solutions for ODEs with initial condition, the law of the chain is uniquely determined by q0 and Qt.21 Path laws and trajectory likelihoods. Three standard facts, used in the Girsanov derivation of §4.3, describe the process at the path level; see [Nor97, Br´ e81, JS03]. The first is well-posedness: a law at the time from which the process is run (the left endpoint for a forward chain, the right end-point for a reverse-time chain), together with bounded, measurable rates on the window [ s, u ], de-termines a unique CTMC path law , a genuine probability measure on the space of right-continuous, piecewise-constant trajectories, just as q0 and Qt determine the marginals through the Kolmogorov equations. Every process in this paper is specified exactly this way, by an endpoint law and a jump-rate family indexed by time, and this fact is what lets us speak of the path law so defined. Path laws take an uppercase P , subscripted by the window as in P[s,u ], and integration against them is written P (dz [s,u ]); finite-space factors keep plain pmf notation, so a joint law over a data point and a trajectory reads P (z0, dz [s,u ]). The second fact is the trajectory likelihood. On a finite state space with bounded rates on the compact window [ s, u ], the chain makes finitely many jumps almost surely, so a path is described by its jump coordinates : the initial state x0, the number of jumps n, the ordered jump times 
+
+s < r 1 < · · · < r n ≤ u, and the post-jump states x1, . . . , x n. With respect to the reference measure on these jump coordinates, the CTMC has density 
+
+qs(x0) exp 
+
+ Z us
+
+Qt(Zt, Z t) dt 
+
+ nY
+
+> k=1
+
+Qrk (xk−1, x k), (12) that is, the initial law qs(x0), the no-jump survival factor accumulated from the exit rate −Qt(Zt, Z t)along the piecewise-constant path, and the rate Qrk (xk−1, x k) of each jump. This density is not a canonical object on the path space: it is taken relative to the jump-coordinate reference measure, and only ratios of such densities enter below, for which that reference measure cancels. Third, consider the compensated jump sum M xy t := N xy t − Λxy t , where N xy t counts the number of x → y jumps in [ s, t ] and Λ xy t := R ts Qr(Zr, y )1(Zr = x) dr is the so-called compensator. Then 
+
+M xy t is a mean-zero martingale and Λ xy t is the expected number of x → y jumps in [ s, t ] given the past. In particular, for any f : X × X → R, we have 
+
+E
+
+ X
+
+> s<r ≤u
+
+f (Zr− , Z r) 1{Zr−̸ = Zr}
+
+ = E
+
+Z us
+
+X 
+
+> y̸=Zt
+
+Qt(Zt, y ) f (Zt, y ) dt 
+
+ , (13) that is, the expected number of x → y jumps in [ t, t + dt ] is qt(x) Qt(x, y ) dt .
+
+Time reversal. The time-reversed process is also a CTMC. When qt(x) > 0, its generator is 
+
+bQt(x, y ) = Qt(y, x ) qt(y)
+
+qt(x) , x̸ = y, (14) as follows from the Markov property and Bayes’ rule. In a generative model we do not have access to the marginal qt, but we can condition on the clean data. Conditioning the reversal on the endpoint z0 (replacing qt by qt|0(· | z0)), and using that Qt(y, z t | z0) = Qt(y, z t) by the Markov property, gives the clean-conditioned reverse rate 
+
+bQt(zt, y | z0) = Qt(y, z t) qt|0(y | z0)
+
+qt|0(zt | z0) , y̸ = zt, (15) 22 where zt is the current noisy state at time t and y is the state reached by moving infinitesimally backward in time. In terms of small-time transition kernels, 
+
+qt−h|t, 0(y | zt, z 0) = δ(zt, y ) + h bQt(zt, y | z0) + o(h), h ↓ 0.
+
+Together with the forward rates Qt, these reverse rates specify every path law used in this paper, which we now name, starting from the clean-conditioned one, the natural object in diffusion. 
+
+Definition 1 (Noising and denoising path laws) . Fix a window [ t1, t 2] ⊂ (0 , T ) and let ( Zt)t∈{ 0}∪ [t1,t 2]
+
+be the noising process with Z0 ∼ q0. The clean-conditioned noising path law is 
+
+P ⋆
+
+> [t1,t 2]|0
+
+(· | z0) := Law  (Zt)t∈[t1,t 2] | Z0 = z0
+
+,
+
+a probability measure on the space of paths over [ t1, t 2]. 1 Prefixing the data law z0 ∼ q0 gives the 
+
+joint law P ⋆ 
+
+> 0,[t1,t 2]
+
+defined by 
+
+P ⋆
+
+> 0,[t1,t 2]
+
+(z0, dz [t1,t 2]) = q0(z0) P ⋆
+
+> [t1,t 2]|0
+
+(dz [t1,t 2] | z0),
+
+and marginalizing it over z0 gives the marginal noising path law P ⋆ 
+
+> [t1,t 2]
+
+:= Law  (Zt)t∈[t1,t 2]
+
+.The model (denoising) path law P θ 
+
+> [t1,t 2]
+
+is constructed from a terminal prior and the model backward rates: initialized at pθt2 and run backward via bQθt (zt, y ). Attaching the data through a reconstruction kernel pθ 
+
+> 0|t1
+
+(z0 | zt1 ) extends it to the model joint 
+
+P θ
+
+> 0,[t1,t 2]
+
+(z0, dz [t1,t 2]) = P θ
+
+> [t1,t 2]
+
+(dz [t1,t 2]) pθ 
+
+> 0|t1
+
+(z0 | zt1 ).
+
+All of these are well defined by the well-posedness discussed above and, by the same Kolmogorov uniqueness, each noising law is equivalently characterized by running the corresponding rates from either endpoint of the interval, conditionally on Z0 or not, forward or backward. For instance, the clean-conditioned law P ⋆ 
+
+> [t1,t 2]|0
+
+run backward is the CTMC started at qt2|0(· | z0) with the clean-conditioned reverse rates bQt(· | z0) of (15); likewise, the joint law P ⋆ 
+
+> 0,[t1,t 2]
+
+read entirely in reverse time starts at qt2 , runs backward with the marginal reverse rates bQt, and attaches the data through 
+
+q0|t1 (· | zt1 ), using that Z0 is conditionally independent of Z[t1,t 2] given Zt1 by the Markov property. In particular, the joint model law P θ 
+
+> 0,[t1,t 2]
+
+is uniquely determined by the triple ( pθt2 , bQθt , p θ 
+
+> 0|t1
+
+), where bQθt may depend on the noisy state Zt but not on the unknown clean data Z0.To conclude, we introduce here the terminal mixing assumption, on which the practical interest of diffusion rests: the noising process destroys all information about the clean data as t ↑ T , which enables sampling from qT without access to the data. However, from the mathematical point of view, this is not a necessary assumption for most of the results in this paper. 
+
+Assumption 1 (Terminal mixing) . As t ↑ T (including T = ∞), the forward process forgets the data: qt|0(· | z0) → qT for every z0 ∈ supp q0, where the terminal law qT does not depend on z0. In particular, the joint law of (Z0, Z t) converges to the independent product q0 ⊗ qT and I(Z0; Zt) → 0.             
+
+> 1Formally, the Skorokhod space D([ t1, t 2],X) of c` adl` ag (right-continuous with left limits) paths from [ t1, t 2] to the finite state space X, equipped with the σ-field generated by the coordinate maps z[t1,t 2]7→zt. Since this σ-field is generated by cylinder events, a path law is uniquely determined by its finite-dimensional marginals, and these are in turn determined by an endpoint law and the jump rates through the Kolmogorov equations; existence follows from the usual construction of the chain from its jump times and jump chain. This is the rigorous content of the well-posedness fact of §4.2, and how the path laws of this definition are constructed.
+
+23 4.3 The CTMC ELBO 
+
+To go from the discrete-time ELBO of Proposition 1 to continuous time, we need to introduce the following definition and hypothesis. 
+
+Definition 2 (Local rate divergence) . For a, b ≥ 0, define Φ( a, b ) := 
+
+
+
+b − a + a log ab , a > 0, b > 0,b, a = 0 , b ≥ 0,
+
++∞, a > 0, b = 0 .
+
+This is the scalar relative entropy rate between two Poisson jump intensities. It is non-negative and vanishes if and only if a = b.
+
+Assumption 2 (Rate-support condition) . We say the learned reverse rates satisfy the rate-support condition if the true reverse rates are absolutely continuous with respect to the learned rates, that is, bQt(zt, · | z0) ≪ bQθt (zt, ·), for dt dq (zt, z 0)-a.e. t, z t, z 0.
+
+This is equivalent to 
+
+supp bQt(zt, · | z0) ⊆ supp bQθt (zt, ·),
+
+that is, the learned process can jump wherever the true reverse process can. 
+
+We now state the continuous-time ELBO on an interior compact window [ t1, t 2] ⊂ (0 , T ), thus avoiding potentially singular endpoints as is commonly done in practice. We provide two alternative derivations: first, a proof based on the infinitesimal expansion of the KL terms of the discrete-time ELBO (Proposition 1), formalizing the typical informal arguments of the literature; second, a more general derivation that relies on Girsanov’s formula and avoids the stronger assumptions required by the infinitesimal-KL approach. 
+
+Theorem 1 (CTMC ELBO) . Let X be finite and let the true and learned reverse CTMCs have bounded, measurable rates bQt(· | z0) and bQθt on [t1, t 2] ⊂ (0 , T ). Define the per-time jump divergence 
+
+J θt (z0, z t) := X 
+
+> y̸=zt
+
+Φ  bQt(zt, y | z0), bQθt (zt, y ). (16) 
+
+Assume the rate-support condition bQt(zt, · | z0) ≪ bQθt (zt, ·) (Assumption 2), the terminal absolute continuity qt2|0(· | z0) ≪ pθt2 , integrability of the local divergence 
+
+Z t2
+
+> t1
+
+Eqt|0(zt|z0)
+
+h
+
+J θt (z0, z t)
+
+i
+
+dt < ∞,
+
+and that the reconstruction term below is well defined. Let P θ
+
+> 0,[t1,t 2]
+
+(z0, ·) be the fixed-z0 section of the model joint law, a finite path measure of total mass pθ
+
+> 0
+
+(z0). With z[t1,t 2] as latent variable, the ELBO is defined at the path-measure level by 2
+
+ELBO [t1,t 2](θ; z0) := − KL 
+
+
+
+P ⋆
+
+> [t1,t 2]|0
+
+(· | z0) P θ
+
+> 0,[t1,t 2]
+
+(z0, ·)
+
+
+
+, (17)           
+
+> 2Strictly, KL( · ∥ · ) here is an abuse of notation: its second argument Pθ
+> 0,[t1,t 2](z0,·) is not a probability measure but a fixed-z0slice of the joint law, of total mass pθ
+> 0(z0). The symbol is to be read simply as the mean log-ratio
+> EP⋆
+> [t1,t 2]|0(·| z0)
+> 
+> log dP ⋆
+> [t1,t 2]|0(·| z0)
+> dP θ
+> 0,[t1,t 2](z0,·)
+> 
+> , which is well defined under the stated absolute-continuity hypotheses (the Radon– Nikodym derivative being a ratio of the kind in (12)).
+
+24 and admits the expanded form 
+
+ELBO [t1,t 2](θ; z0) = Eqt1|0(zt1 |z0)
+
+h
+
+log pθ 
+
+> 0|t1
+
+(z0 | zt1 )
+
+i| {z }
+
+> reconstruction
+
+− KL 
+
+
+
+qt2|0(· | z0) pθt2
+
+| {z }
+
+> terminal prior
+
+−
+
+Z t2
+
+> t1
+
+Eqt|0(zt|z0)
+
+h
+
+J θt (z0, z t)
+
+i
+
+dt 
+
+| {z }
+
+> path integral of jump divergence
+
+.
+
+(18) 
+
+Moreover, the ELBO gap is the relative entropy between the clean-conditioned path laws, 
+
+log pθ
+
+> 0
+
+(z0) − ELBO [t1,t 2](θ; z0) = KL 
+
+
+
+P ⋆
+
+> [t1,t 2]|0
+
+(· | z0) P θ
+
+> [t1,t 2]|0
+
+(· | z0)
+
+
+
+≥ 0.
+
+Our first derivation is based on the following lemma on the infinitesimal expansion of a one-step KL between jump kernels, turning each KL term into the local rate divergence Φ. 
+
+Lemma 1 (Φ as the differential KL of jump kernels) . Let at, b t be piecewise continuous CTMC rates on a finite space X and a compact time interval [t, t + ∆] , ∆ > 0. Let qat,t +∆ , p bt,t +∆ denote their transition kernels from t to t + ∆ . Assume that the jump graph of qat is a fixed set E and that, for every t and constants 0 < c < C < ∞,
+
+c ≤ at(x, y ), b t(x, y ) ≤ C, ∀(x, y ) ∈ E; at(x, y ) = 0 , ∀(x, y ) /∈ E; 0 ≤ bt(x, y ) ≤ C. (19) 
+
+Then, uniformly in t and x,
+
+KL 
+
+
+
+qat,t +∆ (· | x) pbt,t +∆ (· | x)
+
+
+
+= ∆ X 
+
+> y̸=x
+
+Φ at(x, y ), b t(x, y ) + o(∆) .
+
+Proof. The proof proceeds by computing and controlling the o(∆)-expansion of the KL divergence for each possible jump x 7 → y ∈ X depending on whether ( x, y ) ∈ E or not. For jumps x̸ = y, (x, y ) ∈ E, integrating the uniformly continuous rates directly gives 
+
+qat,t +∆ (y | x) = ∆ at(x, y ) + o(∆) , pbt,t +∆ (y | x) = ∆ bt(x, y ) + o(∆) .
+
+Because both rates are bounded below and above on E, we have 
+
+qat,t +∆ (y | x) log qat,t +∆ (y | x)
+
+pbt,t +∆ (y | x) = ∆ at(x, y ) log at(x, y )
+
+bt(x, y ) + o(∆) , (x, y ) ∈ E. (20) It remains to control x̸ = y with ( x, y ) /∈ E. If y is unreachable from x in the graph E, then 
+
+qat,t +∆ (y | x) = 0 by the second part of (19). Otherwise, let d ≥ 2 be the length of a shortest E-path from x to y and let N∆ be the total number of jumps of the process q in the interval [ t, t + ∆]. The uniform rate bounds and the finiteness of X give a common bound on the total exit rate from any state. Thus, we can bound N∆ by a Poisson process with that same rate, to get Pr( N∆ ≥ k) = O(∆ k), k ≥ 1,
+
+uniformly in t and the initial state. Following one shortest path from x to y and making no other jumps has probability at least a constant times ∆ d under both processes, whereas any single-jump 25 transition to y̸ = x has probability O(∆) according to pbt . Hence | log( qat,t +∆ /p bt,t +∆ )| = O(| log ∆ |)whenever qat,t +∆ (y | x) > 0, and 
+
+qat,t +∆ (y | x) log qat,t +∆ (y | x)
+
+pbt,t +∆ (y | x) = O(∆ d| log ∆ |) = O(∆ 2| log ∆ |).
+
+Thus all transitions outside the graph E contribute o(∆) in total: 
+
+X  
+
+> y̸=x, (x,y )/∈E
+
+qat,t +∆ (y | x) log qat,t +∆ (y | x)
+
+pbt,t +∆ (y | x) = o(∆) . (21) Finally, returning to x after a jump requires at least another jump, with probability O(∆ 2). Thus, denoting At(x) := P  
+
+> y̸=x
+
+at(x, y ), B t(x) := P  
+
+> y̸=x
+
+bt(x, y ), self-transition probabilities satisfy 
+
+qat,t +∆ (x | x) = 1 − ∆At(x) + o(∆) , pbt,t +∆ (x | x) = 1 − ∆Bt(x) + o(∆) .
+
+The self-transition KL contribution is therefore (1 − ∆At(x) + o(∆)) log 1 − ∆At(x) + o(∆) 1 − ∆Bt(x) + o(∆) = ∆( Bt(x) − At(x)) + o(∆) . (22) To conclude, adding the self-term (22) to the transitions in E according to (20) and the o(∆) remainder (21) from the terms outside E gives, uniformly in t and x,KL 
+
+
+
+qat,t +∆ (· | x) pbt,t +∆ (· | x)
+
+
+
+= ∆ X 
+
+> y̸=x
+
+bt(x, y ) − at(x, y ) + ∆ X
+
+> (x,y )∈E
+
+at(x, y ) log at(x, y )
+
+bt(x, y ) + o(∆) = ∆ X 
+
+> y̸=x
+
+Φ at(x, y ), b t(x, y ) + o(∆) .
+
+The additional assumptions of Lemma 1, namely, the fixed jump-graph E, piecewise continuity, and uniform boundedness conditions, are only required for the infinitesimal-KL argument of the first proof below. Nonetheless, they hold for masked, uniform, and fixed-support GIDD processes. 
+
+Proof 1 of Theorem 1 (infinitesimal KL). First impose the stronger conditions of Lemma 1: piece-wise continuity and, on each continuity piece, the true jump graph is fixed, and both rates are uniformly bounded above and away from zero on the true graph. Apply the discrete-time ELBO of Proposition 1 to a finite partition ( τk)k of [ t1, t 2], with 
+
+t1 = τ0 < τ 1 < · · · < τ N = t2, ∆k := τk+1 − τk, |∆| := max  
+
+> 0≤k<N
+
+∆k.
+
+This gives ELBO (τk )k (θ; z0) = Eqt1|0(zt1 |z0)
+
+h
+
+log pθ 
+
+> 0|t1
+
+(z0 | zt1 )
+
+i
+
+− KL 
+
+
+
+qt2|0(· | z0) pθt2
+
+
+
+− 
+
+> N−1
+
+X
+
+> k=0
+
+Eqτk+1 |0(zτk+1 |z0)
+
+h
+
+KL 
+
+
+
+qτk |τk+1 ,0(· | zτk+1 , z 0) pθτk |τk+1 (· | zτk+1 )
+
+i 
+
+.
+
+26 The two kernels in each summand are the exact transitions of the true and learned reverse CTMCs over an interval of length ∆ k. Applying Lemma 1 in the backward time orientation gives KL 
+
+
+
+qτk |τk+1 ,0(· | x, z 0) pθτk |τk+1 (· | x)
+
+
+
+= ∆ k
+
+X 
+
+> y̸=x
+
+Φ  bQτk+1 (x, y | z0), bQθτk+1 (x, y ) + rk(x),
+
+where the lemma’s uniform remainders satisfy |rk(x)| ≤ ∆kη(∆ k) for some function η(δ) → 0independent of x and k. Taking the expectation over zτk+1 ∼ qτk+1 |0(· | z0) and summing gives  
+
+> N−1
+
+X
+
+> k=0
+
+∆k Eqτk+1 |0(zτk+1 |z0)
+
+h
+
+J θτk+1 (z0, z τk+1 )
+
+i
+
++ 
+
+> N−1
+
+X
+
+> k=0
+
+E[rk].
+
+The first sum is a Riemann sum of the piecewise continuous integrand t 7 → Eqt|0(zt|z0)
+
+J θt (z0, z t)
+
+and converges to R t2 
+
+> t1
+
+Eqt|0(zt|z0)
+
+J θt (z0, z t) dt as |∆| → 0 by the integrability assumption. The second is controlled uniformly,  
+
+> N−1
+
+X
+
+> k=0
+
+E[rk] ≤ 
+
+> N−1
+
+X
+
+> k=0
+
+∆k η(∆ k) ≤
+
+
+
+sup 
+
+> δ≤| ∆|
+
+η(δ)
+
+ N −1X
+
+> k=0
+
+∆k = ( t2 − t1) sup 
+
+> δ≤| ∆|
+
+η(δ) −−−−→ 
+
+> |∆|→ 0
+
+0,
+
+yielding (18) as the ∆ → 0 limit of the discrete-time ELBOs. 3 Finally, the same skeleton-limit argument applied to the discrete-time VAE gap identity (latent z[t1,t 2]) yields the path-level gap identity above. Our second derivation rests on the following change-of-measure (Girsanov) formula for finite-state jump processes, where we use the path-law properties and notation introduced in §4.2. 
+
+Theorem 2 (Girsanov formula and relative entropy for finite-state CTMCs) . Let X be finite and 
+
+[s, u ] a compact interval. Let P, P θ be the path laws of two CTMCs specified by initial laws ps, p θs
+
+at time s and bounded, measurable rates at, b t, satisfying the support conditions ps ≪ pθs and 
+
+at(x, ·) ≪ bt(x, ·) for every x and a.e. t. Then P ≪ P θ, and the path-law relative entropy between the laws is 
+
+KL 
+
+
+
+P P θ
+
+= KL 
+
+
+
+ps pθs
+
+
+
++
+
+Z us
+
+EZt∼P
+
+ X 
+
+> y̸=Zt
+
+Φ at(Zt, y ), b t(Zt, y ) dt, (23) 
+
+where both sides are finite if and only if the integral is. 
+
+Note the structure of (23): the KL between two CTMC path laws is not a pure rate mismatch, but it also carries the KL between the two laws at the starting time. 
+
+Proof. Write At(x) = P  
+
+> y̸=x
+
+at(x, y ) and Bt(x) = P  
+
+> y̸=x
+
+bt(x, y ) and apply the trajectory likeli-hood (12) to P and P θ. Under the rate-support condition at ≪ bt, the jump-coordinate reference     
+
+> 3Strictly speaking, the argument above computes the limit of the ELBOs of the finite time-skeletons ( Zt)t∈πn. To conclude that this limit is the path-level ELBO (17), take nested partitions πnwhose union is dense in [ t1, t 2]: the skeletons then generate the whole path σ-field, and the skeleton KLs increase to the path KL [Gra11, Lemma 5.4.1].
+
+27 measure cancels in the density ratio, which is therefore well defined P -a.s. so that P ≪ P θ, and in particular the ratio up to τ ∈ [s, u ] is given by 
+
+dP dP θ [s,τ ]
+
+= ps(Zs)
+
+pθs(Zs) exp 
+
+ Z τs
+
+ Bt(Zt) − At(Zt) dt 
+
+ Y   
+
+> s<r ≤τ:Zr−̸=Zr
+
+ar(Zr− , Z r)
+
+br(Zr− , Z r) ,
+
+(for further details we refer to [Br´ e81, JS03]). Taking log of this ratio and integrating against P ,the jump compensator (13) with f = log( at/b t) gives 
+
+EP
+
+ X
+
+> s<r ≤u
+
+log ar(Zr− , Z r)
+
+br(Zr− , Z r)
+
+ =
+
+Z us
+
+EP
+
+ X 
+
+> y̸=Zt
+
+at(Zt, y ) log at(Zt, y )
+
+bt(Zt, y )
+
+ dt, 
+
+while the holding factor contributes R us EP
+
+hP 
+
+> y̸=Zt
+
+ bt(Zt, y ) − at(Zt, y )i
+
+dt . Adding the initial relative entropy KL  ps pθs
+
+ and collecting terms through Φ( a, b ) = b−a+a log( a/b ) yields (23). 
+
+Proof 2 of Theorem 1 (Girsanov). We start from the path-measure definition (17). The reverse Markov property factorizes the model z0-slice as 
+
+P θ
+
+> 0,[t1,t 2]
+
+(z0, dz [t1,t 2]) = pθ 
+
+> 0|t1
+
+(z0 | zt1 ) P θ
+
+> [t1,t 2]
+
+(dz [t1,t 2]).
+
+Substituting this factorization into (17) and applying the Radon–Nikodym chain rule to the result-ing density gives 
+
+− ELBO [t1,t 2](θ; z0) = −Eqt1|0(·| z0)
+
+h
+
+log pθ 
+
+> 0|t1
+
+(z0 | Zt1 )
+
+i
+
++ KL 
+
+
+
+P ⋆
+
+> [t1,t 2]|0
+
+(· | z0) P θ
+
+> [t1,t 2]
+
+
+
+,
+
+since the time-t1 marginal of P ⋆
+
+> [t1,t 2]|0
+
+(· | z0) is qt1|0(· | z0). Apply now Theorem 2 to the path laws P ⋆
+
+> [t1,t 2]|0
+
+(· | z0) and P θ
+
+> [t1,t 2]
+
+, started from qt2|0(· | z0) ≪ pθt2
+
+with reverse rates bQt(zt, · | z0) ≪ bQθt (zt, ·), respectively, to express the second KL term as KL 
+
+
+
+qt2|0(· | z0) pθt2
+
+
+
++
+
+Z t2
+
+> t1
+
+Eqt|0(zt|z0)
+
+ X 
+
+> y̸=zt
+
+Φ  bQt(zt, y | z0), bQθt (zt, y ) dt, 
+
+directly yielding (18), with equality at the path-law level by Girsanov’s formula. For the gap identity, the finite measure P θ
+
+> 0,[t1,t 2]
+
+(z0, ·) has total mass pθ
+
+> 0
+
+(z0), so its normalization is the model posterior path law 
+
+P θ
+
+> [t1,t 2]|0
+
+(· | z0) := P θ
+
+> 0,[t1,t 2]
+
+(z0, ·)
+
+pθ
+
+> 0
+
+(z0) .
+
+Substituting P θ
+
+> 0,[t1,t 2]
+
+(z0, ·) = pθ
+
+> 0
+
+(z0) P θ
+
+> [t1,t 2]|0
+
+(· | z0) into (17) splits off the constant log pθ
+
+> 0
+
+(z0) and leaves log pθ
+
+> 0
+
+(z0) − ELBO [t1,t 2](θ; z0) = KL 
+
+
+
+P ⋆
+
+> [t1,t 2]|0
+
+(· | z0) P θ
+
+> [t1,t 2]|0
+
+(· | z0)
+
+
+
+.
+
+28 The ELBO recipe. Equation (18) gives a three-step recipe for any discrete-diffusion process: 1. Forward law. Choose the noising kernel qt|0(· | z0) with generator Qt.2. Reverse rates. Form the clean-conditioned reverse rate bQt(zt, y | z0) using (15), and choose a model rate bQθt (zt, y ) that has access to the noisy state but not the clean data. 3. Assemble. Sum the per-jump Φ( bQt, bQθt ) over the admissible jumps y̸ = zt, integrate over time and the noisy state zt ∼ qt|0(· | z0), and append the reconstruction and prior boundary terms. Models are trained by maximizing the ELBO, equivalently by minimizing its negative. We write the per-data and data-averaged negative ELBO 
+
+NELBO [t1,t 2](θ; z0) := − ELBO [t1,t 2](θ; z0), NELBO [t1,t 2](θ) := Eq0
+
+NELBO [t1,t 2](θ; z0) .
+
+As this is the quantity practitioners track and optimize, we phrase our results in terms of the NELBO throughout: variational bounds are stated as ELBOs, but the trained cost, calibration values, and floors below are their negatives. 
+
+4.4 Importance sampling, time clocks, and the empirical ELBO 
+
+The bound (18) becomes a training objective by estimating its time integral, optionally with an importance sampling (IS) schedule pIS (t) for variance reduction. 
+
+Empirical estimator. Drawing t ∼ pIS on [ t1, t 2] and zt ∼ qt|0(· | z0) gives the unbiased estimator 
+
+\NELBO [t1,t 2](θ; z0) = Et∼pIS , q t|0
+
+ J θt (z0, z t)
+
+pIS (t)
+
+
+
++ KL 
+
+
+
+qt2|0(· | z0) pθt2
+
+
+
++ crec( θ), (24) where 1 /p IS (t) is the change of measure required to keep the IS estimate unbiased and crec( θ) is a cross-entropy-like term given by the empirical average of − log pθ 
+
+> 0|t1
+
+(z0 | zt1 ) over sampled ( z0, z t1 ). In particular, this term accommodates any final ad hoc sampling step from t1 to 0, such as the standard collapsing or resampling to clean tokens used in practice. The terminal-prior KL can be computed either analytically or approximately from the forward terminal state and the choice of sampling prior. Retaining the two boundary terms keeps the per-process estimates complete and allows direct comparison of ELBOs across methods by tracking the boundary terms usually neglected in the literature as “constant”. 
+
+Importance sampling as the Markov process clock. Choosing an importance sampler for the time integral is equivalent to choosing the clock on which the Markov process is parameterized. To see it, let τ = τ (t) be a strictly increasing C1 change of time with dτ /dt > 0, and let t = t(τ )denote its inverse. The reparameterized chain Z′ 
+
+> τ
+
+:= Zt(τ ) has transition kernel and generator 
+
+q′ 
+
+> τ2|τ1
+
+(y | x) := qt(τ2)|t(τ1)(y | x), Q′ 
+
+> τ
+
+(x, y ) = dt dτ Qt(τ )(x, y ).
+
+29 For our finite-state setting this can be seen from the chain rule in the definition of the generator. Consequently, writing τ0 = τ (0) and t = t(τ ), the reverse rates transform in the same way, 
+
+bQ′ 
+
+> τ
+
+(z, y ) = Q′ 
+
+> τ
+
+(y, z ) q′  
+
+> τ|τ0
+
+(y)
+
+q′  
+
+> τ|τ0
+
+(z) = dt dτ Qt(y, z ) qt|0(y)
+
+qt|0(z) = dt dτ bQt(z, y ),
+
+and similarly for the learned and clean-conditioned rates. Estimating R t2 
+
+> t1
+
+Eqt|0
+
+J θt
+
+ dt with impor-tance density pIS (t) corresponds to sampling uniformly according to the clock 
+
+τ (t) := τ1 +
+
+Z tt1
+
+pIS (u) du, dτ = pIS (t) dt, dt dτ = 1
+
+pIS (t) .
+
+Since Φ( ca, cb ) = cΦ( a, b ) for all c > 0, the Jacobian factor can be absorbed into both reverse rates: 
+
+Z t2
+
+> t1
+
+Eqt|0
+
+h
+
+J θt
+
+i
+
+dt =
+
+Z τ2
+
+> τ1
+
+dt dτ Eqt|0
+
+ X 
+
+> y̸=zt
+
+Φ  bQt(zt, y | z0), bQθt (zt, y ) dτ 
+
+=
+
+Z τ2
+
+> τ1
+
+Eq′ 
+
+> τ|τ0
+
+ X 
+
+> y̸=zτ
+
+Φ  bQ′ 
+
+> τ
+
+(zτ , y | z0), bQ′θτ (zτ , y ) dτ =
+
+Z τ2
+
+> τ1
+
+Eq′ 
+
+> τ|τ0
+
+h
+
+J ′θτ
+
+i
+
+dτ. 
+
+Thus, choosing the importance sampler pIS is precisely choosing the clock on which the reverse Markov chain is run. In the separable generator case where Qt = dλ dt M with λ(t) a strictly increasing scalar function of time, one may further choose the distinguished clock τ = λ(t), in which case the forward process becomes time-homogeneous with generator M .It is worth noting that importance sampling gives an unbiased estimator of the ELBO, whereas deliberately reweighting the per-time integrand changes the training objective. Suitable reweight-ings, such as monotone ones, can themselves define valid and potentially tighter variational bounds [ST25, KSPH21] and are commonly used to trade likelihood for sample quality. 
+
+Variance-optimal importance sampling. For one sample t ∼ pIS , the Monte Carlo estimator attains minimal variance at the optimal importance density [RC04], 
+
+p⋆
+
+> IS
+
+(t) ∝
+
+q
+
+Eq0 qt|0
+
+J θt (z0, z t)2.
+
+This second-moment rule is widely used in practice for adaptive timestep sampling in DDPMs, while variational diffusion models directly learn the noise schedule to reduce the variance of the VLB estimator [ND21, KSPH21]. In the next section, Theorem 4 identifies the oracle mean integrand J ⋆t with the instantaneous rate of information loss, J ⋆t = ddt H(Z0 | Zt). Thus pIS (t) ∝ J ⋆t defines an information-uniform clock: it equalizes the expected oracle information loss per unit clock, but is not generally variance-optimal. Nonetheless, recent continuous-diffusion work uses this conditional-entropy-rate profile to adapt the training noise distribution [RNB +26]. 30 5 What negative ELBO minimization really optimizes 
+
+5.1 ELBO as distance to the oracle reverse process 
+
+We begin with our main result on how to interpret the ELBO: after subtracting the data entropy, the negative ELBO (NELBO) splits into two mismatch terms, the reconstruction error at the lower endpoint and the path-law KL from the oracle to the model CTMC. The NELBO is therefore more than a variational upper bound on the negative log-likelihood: it is the path divergence to the oracle reverse dynamics, which we call the Oracle Distance theorem. Recall from Definition 1 the noising and model path laws P ⋆ 
+
+> [t1,t 2]
+
+and P θ 
+
+> [t1,t 2]
+
+on [ t1, t 2] ⊂ (0 , T ), in their backward descriptions started at qt2 and pθt2 and run with the rates bQt and bQθt .
+
+Theorem 3 (Oracle Distance) . Consider [t1, t 2] ⊂ (0 , T ) with bounded, measurable reverse rates 
+
+bQt and bQθt . Impose the support conditions q0|t1 ≪ pθ 
+
+> 0|t1
+
+, qt2 ≪ pθt2 , and bQt(zt, ·) ≪ bQθt (zt, ·) a.e., as well as integrability of the jump-divergence 
+
+Z t2
+
+> t1
+
+Eq0 qt|0
+
+ X 
+
+> y̸=zt
+
+Φ  bQt(zt, y ), bQθt (zt, y ) dt < ∞.
+
+For the path laws P ⋆
+
+> [t1,t 2]
+
+, P θ 
+
+> [t1,t 2]
+
+above, 
+
+NELBO [t1,t 2](θ) − H(q0) = Eqt1
+
+h
+
+KL 
+
+
+
+q0|t1 (· | zt1 ) pθ 
+
+> 0|t1
+
+(· | zt1 )
+
+i 
+
++ KL 
+
+
+
+P ⋆ 
+
+> [t1,t 2]
+
+P θ
+
+> [t1,t 2]
+
+
+
+, (25) 
+
+where the path-law KL is, by Theorem 2, 
+
+KL 
+
+
+
+P ⋆ 
+
+> [t1,t 2]
+
+P θ
+
+> [t1,t 2]
+
+
+
+= KL 
+
+
+
+qt2 pθt2
+
+
+
++
+
+Z t2
+
+> t1
+
+Eqt
+
+hP  
+
+> y̸=zt
+
+Φ  bQt(zt, y ), bQθt (zt, y )i
+
+dt. (26) Note that the support condition bQt(zt, ·) ≪ bQθt (zt, ·) is a consequence of bQt(zt, · | z0) ≪ bQθt (zt, ·), since the marginal reverse rate is a conditional expectation of the clean-conditioned rate. Simi-larly, the jump-rate divergence Φ( bQt, bQθt ) is evaluated against the unconditional reverse rates, and its integrability follows from the integrability of Φ( bQt(· | z0), bQθt ) either using the Pythagorean decomposition (Proposition 2) or Jensen’s inequality and Φ’s convexity in its first argument. The proof combines two ingredients of independent interest, which we state here and prove in §5.2 and §5.3. The first is a Pythagorean decomposition of the ELBO integrand around the marginal reverse rate: the model pays the oracle’s cost plus its own mismatch to the oracle, with no cross term. 
+
+Proposition 2 (Pythagorean decomposition of the ELBO integrand) . For any Zt-measurable model reverse rate bQθt such that the model mismatch term below is finite, we have 
+
+Eq0 qt|0
+
+h
+
+J θt (z0, z t)
+
+i
+
+= Eq0 qt|0
+
+h
+
+J θ⋆ t (z0, z t)
+
+i| {z }
+
+> oracle cost
+
++ Eqt
+
+hP  
+
+> y̸=zt
+
+Φ  bQt(zt, y ), bQθt (zt, y )i| {z }
+
+> model mismatch
+
+, (27) 
+
+where J θ⋆ t is the integrand (16) evaluated at the marginal reverse rate bQθ⋆ t = bQt, which §5.2 identifies as its unique Zt-measurable optimizer. 
+
+31 The second ingredient evaluates the oracle cost, which we denote by 
+
+J ⋆t := Eq0 qt|0
+
+h
+
+J θ⋆ t (z0, z t)
+
+i
+
+= EZ0,Z t
+
+ X 
+
+> y̸=Zt
+
+Φ  bQt(Zt, y | Z0), bQt(Zt, y ) . (28) We now prove that the oracle cost J ⋆t is exactly the rate at which the noising process destroys information about the clean data, provided the following mild regularity assumptions (which the masked, uniform, and GIDD processes of §7 satisfy; for GIDD requiring that the interpolating law has fixed support). 
+
+Assumption 3 (Regularity and fixed support.) . In the compact window [t1, t 2] ⊂ (0 , T ), we have piecewise continuous and bounded rates Qt such that the piecewise supports of qt and qt|0(· | z0) are independent of t for each z0 ∈ supp q0.
+
+Theorem 4 (NELBO oracle integrand = information loss rate) . Under the regularity and fixed-support assumptions above, 
+
+J ⋆t = ddt H(Z0 | Zt) = − ddt I(Z0; Zt) ≥ 0, (29) 
+
+and consequently, 
+
+Z t2
+
+> t1
+
+J ⋆t dt = H(Z0 | Zt2 ) − H(Z0 | Zt1 ) = I(Z0; Zt1 ) − I(Z0; Zt2 ). (30) The regularity assumption is needed only for this second ingredient, not for Theorem 3 itself; 
+
+§5.5 gives an alternative proof of the latter that avoids it. Granting the two ingredients, the proof is a short assembly. 
+
+Proof of Theorem 3 . Averaging the negative CTMC ELBO (18) over Z0 ∼ q0 expresses the data-averaged negative ELBO, NELBO [t1,t 2](θ), as the sum of a reconstruction term, a path term, and a terminal-prior term: 
+
+EZ0,Z t1
+
+h
+
+− log pθ 
+
+> 0|t1
+
+(Z0 | Zt1 )
+
+i
+
++
+
+Z t2
+
+> t1
+
+EZ0,Z t
+
+h
+
+J θt (Z0, Z t)
+
+i
+
+dt + EZ0
+
+h
+
+KL 
+
+
+
+qt2|0(· | Z0) pθt2
+
+i 
+
+,
+
+and we treat the three terms in turn. 
+
+Reconstruction term. Subtracting and adding H(Z0 | Zt1 ) = EZ0,Z t1
+
+− log q0|t1 (Z0 | Zt1 ) gives 
+
+EZ0,Z t1
+
+h
+
+− log pθ 
+
+> 0|t1
+
+(Z0 | Zt1 )
+
+i
+
+= H(Z0 | Zt1 ) + EZt1
+
+h
+
+KL 
+
+
+
+q0|t1 (· | Zt1 ) pθ 
+
+> 0|t1
+
+(· | Zt1 )
+
+i 
+
+.
+
+Path term. Proposition 2 splits the per-time integrand into the oracle and model terms 
+
+Z t2
+
+> t1
+
+EZ0,Z t
+
+h
+
+J θt
+
+i
+
+dt =
+
+Z t2
+
+> t1
+
+J ⋆t dt +
+
+Z t2
+
+> t1
+
+EZt
+
+hP  
+
+> y̸=Zt
+
+Φ  bQt(Zt, y ), bQθt (Zt, y )i
+
+dt, 
+
+and Theorem 4 integrates the oracle cost into the information lost over the window, 
+
+Z t2
+
+> t1
+
+J ⋆t dt = H(Z0 | Zt2 ) − H(Z0 | Zt1 ).
+
+32 Terminal-prior term. Splitting the log ratio through the marginal qt2 , we get 
+
+EZ0
+
+h
+
+KL 
+
+
+
+qt2|0(· | Z0) pθt2
+
+i 
+
+= EZ0,Z t2
+
+
+
+log qt2|0(Zt2 | Z0)
+
+qt2 (Zt2 )
+
+
+
++ Eqt2
+
+"
+
+log qt2 (Zt2 )
+
+pθt2 (Zt2 )
+
+#
+
+= I(Z0; Zt2 ) + KL 
+
+
+
+qt2 pθt2
+
+
+
+= H(Z0) − H(Z0 | Zt2 ) + KL 
+
+
+
+qt2 pθt2
+
+
+
+,
+
+where we used the mutual information identities 
+
+I(Z0; Zt2 ) = H(Z0) − H(Z0 | Zt2 ) = H(Zt2 ) − H(Zt2 | Z0).
+
+Assembly. Summing the three terms in the order reconstruction, path, and terminal prior, gives NELBO [t1,t 2](θ) = H(Z0 | Zt1 ) + EZt1
+
+h
+
+KL 
+
+
+
+q0|t1 (· | Zt1 ) pθ 
+
+> 0|t1
+
+(· | Zt1 )
+
+i 
+
++H(Z0 | Zt2 ) −H(Z0 | Zt1 ) + 
+
+Z t2
+
+> t1
+
+EZt
+
+hP  
+
+> y̸=Zt
+
+Φ  bQt(Zt, y ), bQθt (Zt, y )i
+
+dt 
+
++H(Z0) −H(Z0 | Zt2 ) + KL 
+
+
+
+qt2 pθt2
+
+
+
+.
+
+The conditional entropies telescope into the data entropy H(Z0) = H(q0), yielding NELBO [t1,t 2](θ) − H(q0) = EZt1
+
+h
+
+KL 
+
+
+
+q0|t1 (· | Zt1 ) pθ 
+
+> 0|t1
+
+(· | Zt1 )
+
+i 
+
++ KL 
+
+
+
+qt2 pθt2
+
+
+
++
+
+Z t2
+
+> t1
+
+EZt
+
+hP  
+
+> y̸=Zt
+
+Φ  bQt(Zt, y ), bQθt (Zt, y )i
+
+dt, 
+
+which is (25) when combined with the expansion of KL 
+
+
+
+P ⋆ 
+
+> [t1,t 2]
+
+P θ
+
+> [t1,t 2]
+
+
+
+from (26). When both boundary terms vanish, the identity gives a clean expression for the NELBO: exactly the jump-rate divergence between the oracle and the model reverse processes (Figure 3). 
+
+Corollary 1. In the setting of Theorem 3, suppose the reconstruction term at t1 in (25) and the terminal KL  qt2 pθt2
+
+ vanish as t1 ↓ 0, t2 ↑ T , and that Eq0 qt|0
+
+J θt (z0, z t) is integrable on [0 , T ].Then 
+
+NELBO [0 ,T ](θ) − H(q0) = 
+
+Z T
+
+> 0
+
+Eqt
+
+hP  
+
+> y̸=zt
+
+Φ  bQt(zt, y ), bQθt (zt, y )i
+
+dt. (31) 
+
+5.2 The ELBO as a projection problem and the Pythagorean decomposition 
+
+The model rate cannot depend on the unknown clean data Z0. The local CTMC ELBO therefore poses a projection problem: given a random target rate depending on ( Z0, Z t), choose the best rate that only has access to Zt. Its solution is governed by an exact Pythagorean theorem for Φ, which identifies the optimal projection and splits the trained cost into oracle cost plus model mismatch. 
+
+Lemma 2 (Bregman–Pythagoras identity for Φ) . Let A ≥ 0 be such that E[A log A] < ∞, G an observable, and B = b(G) ≥ 0 a G-measurable predictor for which the displayed expectations are finite. With B⋆ := E[A | G],
+
+E[Φ( A, B )] = E[Φ( A, B ⋆)] + E[Φ( B⋆, B )] .
+
+33 Proof. Condition on G and write m = B⋆ = E[A | G] and b = B. First suppose m, b > 0. Expanding Φ( a, b ) = b − a + a log ab and using E[A | G] = m (with the convention 0 log 0 = 0) gives 
+
+E[Φ( A, b ) | G] = Eb − A + A log Ab G = b − m + E[A log A | G] − m log b, 
+
+E[Φ( A, m ) | G] = Em − A + A log Am G = E[A log A | G] − m log m, 
+
+Φ( m, b ) = b − m + m log mb = b − m + m log m − m log b. 
+
+Adding the last two displays reproduces the first, giving the conditional identity 
+
+E[Φ( A, B ) | G] = E[Φ( A, B ⋆) | G] + Φ( B⋆, B ).
+
+The boundary cases follow by continuity with the conventions in the definition of Φ. Taking the expectation over G yields the claim. Since E[Φ( B⋆, B )] ≥ 0 vanishes if and only if B = B⋆ a.e., the identity exhibits the conditional mean B⋆ = E[A | G] as the unique minimizer of E[Φ( A, B )] over non-negative G-measurable pre-dictors B. (The same conclusion follows directly from convexity: b 7 → E[Φ( A, b ) | G = g] is strictly convex with derivative 1 −E[A | G = g] /b .) Applied to the reverse rates, with the conditional mean computed by Bayes’ rule, this yields the population optimizer of the ELBO. 
+
+Theorem 5 (Reverse-rate projection) . Fix a time t and a jump destination y, and let (Z0, Z t) ∼
+
+q0 qt|0 on the event {Zt̸ = y}. Among model rates bQθt measurable with respect to the noisy state Zt
+
+only, the expected rate divergence E
+
+h
+
+Φ  bQt(Zt, y | Z0), bQθt (Zt, y )i
+
+is minimized uniquely up to null sets by 
+
+bQθ⋆ t (zt, y ) := Eq0|t(z0|zt)
+
+h bQt(zt, y | z0)
+
+i
+
+= bQt(zt, y ). (32) 
+
+Proof. By Lemma 2 and the discussion following it, with G = Zt and target 
+
+A(Z0, Z t) := bQt(Zt, y | Z0) = Qt(y, Z t) qt|0(y | Z0)
+
+qt|0(Zt | Z0) ,
+
+the ELBO-optimal Zt-measurable rate is the conditional mean E[A(Z0, Z t) | Zt = zt], given by 
+
+E
+
+h bQt(Zt, y | Z0) Zt = zt
+
+i
+
+= Qt(y, z t) X
+
+> z0
+
+q0(z0)qt|0(zt | z0)
+
+qt(zt)
+
+qt|0(y | z0)
+
+qt|0(zt | z0)= Qt(y, z t) 1
+
+qt(zt)
+
+X
+
+> z0
+
+q0(z0) qt|0(y | z0)= Qt(y, z t) qt(y)
+
+qt(zt)= bQt(zt, y ).
+
+The oracle dynamics are therefore those of the true marginal reversal, whose jump rates are the posterior average of the clean-conditioned rates (32) (Figure 1). Applying Lemma 2 jump by jump around this optimizer proves the first ingredient. 34 Proof of Proposition 2. Fix t and a candidate reverse jump destination y, and apply Lemma 2 with observable G = Zt, target A = bQt(Zt, y | Z0), and model rate B = bQθt (Zt, y ). By Theorem 5 the conditional mean is B⋆ = E[A | Zt = zt] = bQt(zt, y ), so 
+
+Eq0 qt|0
+
+h
+
+Φ  bQt(zt, y | z0), bQθt (zt, y )i
+
+= Eq0 qt|0
+
+h
+
+Φ  bQt(zt, y | z0), bQt(zt, y )i
+
++ Eqt
+
+h
+
+Φ  bQt(zt, y ), bQθt (zt, y )i
+
+,
+
+the mismatch expectation collapsing to one over zt ∼ qt because both arguments are Zt-measurable. Summing over the admissible jumps y̸ = zt concludes the proof. 
+
+5.3 The oracle ELBO is the rate of information loss 
+
+The second ingredient identifies the irreducible part of the ELBO, the oracle cost of Proposition 2: even the oracle reverse rate must pay for the information that the forward noising process destroys about the clean data, and the ELBO tracks exactly this (Figure 2). We now prove Theorem 4, stated in §5.1. 
+
+Proof of Theorem 4. Terms with zero clean-conditioned rate contribute zero under the 0 log 0 = 0 convention. On every positive-Φ term, the fixed-support assumption makes the following ratios well defined. Within Φ( bQt(· | Z0), bQt), the quotient of reverse rates is, by the conditional and unconditional reverse rate formulas, 
+
+bQt(z, y | z0)
+
+bQt(z, y ) =
+
+Qt(y, z ) qt|0(y | z0)
+
+qt|0(z | z0)
+
+Qt(y, z ) qt(y)
+
+qt(z)= qt|0(y | z0)
+
+qt|0(z | z0)
+
+qt(z)
+
+qt(y) = q0|t(z0 | y)
+
+q0|t(z0 | z) ,
+
+where the last equality is Bayes’ rule. In the expansion Φ( a, b ) = b − a + a log( a/b ), the first two terms cancel after conditioning on Zt because bQt(z, y ) = E
+
+h bQt(z, y | Z0) Zt = z
+
+i
+
+, as in Theorem 5. Thus, we get 
+
+J ⋆t = EZ0,Z t
+
+ X 
+
+> y̸=Zt
+
+bQt(Zt, y | Z0) log bQt(Zt, y | Z0)
+
+bQt(Zt, y )
+
+
+
+= X
+
+> z0
+
+X
+
+> z
+
+X 
+
+> y̸=z
+
+q0(z0) qt|0(z | z0) bQt(z, y | z0) log q0|t(z0 | y)
+
+q0|t(z0 | z) .
+
+Using the reverse rate identity (15) to make the substitution 
+
+qt|0(z | z0) bQt(z, y | z0) = qt|0(y | z0) Qt(y, z ),
+
+we get, after adding the diagonal generator terms whose logarithms vanish, that 
+
+J ⋆t = X
+
+> z0,y,z
+
+q0(z0) qt|0(y | z0) Qt(y, z ) log q0|t(z0 | y)
+
+q0|t(z0 | z) . (33) 35 Reciprocally, we now differentiate the conditional entropy 
+
+H(Z0 | Zt) = − X
+
+> z0,z
+
+q0(z0) qt|0(z | z0) log q0|t(z0 | z).
+
+Because the state space and supports are finite and constant on the interior window, differentiation may pass through the sum. The derivative of the log-density terms cancels by normalization: 
+
+X
+
+> z0,z
+
+q0(z0) qt|0(z | z0) ∂t log q0|t(z0 | z) = X
+
+> z
+
+qt(z) ∂t
+
+X
+
+> z0
+
+q0|t(z0 | z) = 0 ,
+
+so that ddt H(Z0 | Zt) = − X
+
+> z0,z
+
+q0(z0) ∂tqt|0(z | z0) log q0|t(z0 | z).
+
+Inserting the Kolmogorov forward equation ∂tqt|0(z | z0) = P 
+
+> y
+
+qt|0(y | z0)Qt(y, z ), 
+
+ddt H(Z0 | Zt) = − X
+
+> z0,y,z
+
+q0(z0) qt|0(y | z0) Qt(y, z ) log q0|t(z0 | z).
+
+Since P 
+
+> z
+
+Qt(y, z ) = 0, we may add the vanishing term P 
+
+> z0,y,z
+
+q0(z0)qt|0(y | z0)Qt(y, z ) log q0|t(z0 |
+
+y) = 0, obtaining 
+
+ddt H(Z0 | Zt) = X
+
+> z0,y,z
+
+q0(z0) qt|0(y | z0) Qt(y, z ) log q0|t(z0 | y)
+
+q0|t(z0 | z) . (34) Comparing (33) and (34) proves the entropy identity. Since H(q0) is constant, ddt H(Z0 | Zt) = 
+
+− ddt I(Z0; Zt). Non-negativity follows from Φ ≥ 0. The fixed-support assumption also makes the conditional entropy absolutely continuous on compact windows, so integration proves (30). 
+
+Corollary 2 (Monotonicity of retained information) . The map t 7 → I(Z0; Zt) is nonincreasing. Indeed, for s < t the Markov chain Z0 → Zs → Zt and the data-processing inequality give 
+
+I(Z0; Zt) ≤ I(Z0; Zs). Alternatively, wherever differentiable, − ddt I(Z0; Zt) = J ⋆t ≥ 0.
+
+In particular, the oracle path term R t2 
+
+> t1
+
+J ⋆t dt is exactly the mutual information lost over that window, I(Z0; Zt1 ) − I(Z0; Zt2 ). 
+
+5.4 The universal NELBO floor 
+
+Theorem 3 already explains why the data entropy is the universal NELBO floor: after subtracting 
+
+H(q0), the objective is a sum of relative entropies and is therefore non-negative. We nonetheless record the direct variational argument below, since it does not rely on the information-loss regularity assumptions and it makes the equality case explicit. At the oracle the ELBO is tight and the NELBO attains the data entropy H(q0), independently of the noising process. 
+
+Lemma 3. For every noising process law P ⋆ and denoising model process law P θ on [t1, t 2] ⊂ (0 , T )
+
+satisfying the conditions of Theorem 1, we have 
+
+NELBO [t1,t 2](θ) ≥ Eq0
+
+h
+
+− log pθ
+
+> 0
+
+(z0)
+
+i
+
+≥ H(q0). (35) 36 Proof. The first inequality is the ELBO gap of Theorem 1; the second is Gibbs’ inequality 
+
+Eq0
+
+h
+
+− log pθ
+
+> 0
+
+(z0)
+
+i
+
+= H(q0) + KL 
+
+
+
+q0 pθ
+
+> 0
+
+
+
+≥ H(q0).
+
+Corollary 3 (Universal oracle NELBO floor) . Fix [t1, t 2] ⊂ (0 , T ). Suppose there exists a model 
+
+θ⋆ that realizes the oracle prior pθ⋆ 
+
+> t2
+
+= qt2 , the oracle marginal reverse rate bQθ⋆ 
+
+> t
+
+= bQt on [t1, t 2],and the oracle reconstruction kernel pθ⋆ 
+
+> 0|t1
+
+= q0|t1 . Then, it exactly recovers the clean-data marginal 
+
+pθ⋆ 
+
+> 0
+
+= q0. In particular, the ELBO is tight, 
+
+ELBO [t1,t 2](θ⋆; z0) = log pθ⋆ 
+
+> 0
+
+(z0) = log q0(z0), (36) 
+
+and the expected NELBO attains the data entropy floor, 
+
+inf  
+
+> θ
+
+NELBO [t1,t 2](θ) = NELBO [t1,t 2](θ⋆) = H(q0). (37) 
+
+The same conclusion holds at t2 = T by taking the limit t2 ↑ T .Proof. Evaluate Theorem 3 at θ⋆. Its reconstruction term vanishes because pθ⋆ 
+
+> 0|t1
+
+= q0|t1 , and its path KL vanishes because P θ⋆ 
+
+> [t1,t 2]
+
+= P ⋆
+
+> [t1,t 2]
+
+: both are initialized at qt2 and run with the marginal reverse rate bQt. Hence NELBO [t1,t 2](θ⋆) = H(q0), which with the floor of Lemma 3 gives inf θ NELBO [t1,t 2](θ) = H(q0). Lemma 3 also writes NELBO [t1,t 2](θ⋆) − H(q0) as a sum of two non-negative gaps, the expected ELBO gap and KL( q0 ∥ pθ⋆ 
+
+> 0
+
+). Since this sum is zero, both vanish a.e., so pθ⋆ 
+
+> 0
+
+= q0 and the ELBO is tight for q0-a.e. z0, proving (36). Finally, by the terminal mixing and convergence Assumption 1, the joint law of ( Z0, Z t) converges on the finite state space, where entropy and mutual information are continuous and bounded, so the same conclusion passes to t2 ↑ T , including T = ∞.
+
+5.5 An alternative proof of the Oracle Distance theorem 
+
+The assembly proof of §5.1 relies on the regularity and fixed-support conditions of Assumption 3, which the theorem itself does not need. We close the section with a proof that avoids them: it needs only the reverse-time factorization of the joint noising law, the KL chain rule, and Girsanov’s formula, at the price of manipulating laws on the path space rather than rates. The compari-son between the two proofs is also instructive: the KL chain rule plays below the role that the Pythagorean split played at the rate level, and since Φ is the KL rate between Poisson jump intensities, Proposition 2 may be read as the infinitesimal, jump-by-jump version of the chain rule. Two reminders from §4.2 before the proof. First, the path-laws (Definition 1): the noising process defines the clean-conditioned law P ⋆
+
+> [t1,t 2]|0
+
+(· | z0), a kernel from clean data to trajectories; prefixing z0 ∼ q0 gives the joint P ⋆
+
+> 0,[t1,t 2]
+
+, and marginalizing z0 out gives P ⋆
+
+> [t1,t 2]
+
+, while the model law P θ 
+
+> [t1,t 2]
+
+and its joint P θ 
+
+> 0,[t1,t 2]
+
+are built in reverse time from the triple ( pθt2 , bQθt , p θ 
+
+> 0|t1
+
+). Second, the descriptions: by Kolmogorov uniqueness, each law is equally specified from either endpoint of the window, and the backward description of the joint noising law is what makes the proof below work. To avoid the nuances of path densities, we integrate against these laws directly, writing 
+
+P (dz [t1,t 2]) in the path variable while keeping plain pmf notation for the finite data factor z0 (§4.2), 37 with Radon–Nikodym derivatives dP dP ′ in place of density ratios. In particular, the joint noising and model laws are, as per their defining factorizations, 
+
+P ⋆
+
+> 0,[t1,t 2]
+
+(z0, dz [t1,t 2]) = q0(z0) P ⋆
+
+> [t1,t 2]|0
+
+(dz [t1,t 2] | z0),P θ
+
+> 0,[t1,t 2]
+
+(z0, dz [t1,t 2]) = P θ
+
+> [t1,t 2]
+
+(dz [t1,t 2]) pθ 
+
+> 0|t1
+
+(z0 | zt1 ).
+
+Direct proof of Theorem 3. The support hypotheses ensure that every term below is well defined: 
+
+P ⋆ 
+
+> [t1,t 2]
+
+≪ P θ 
+
+> [t1,t 2]
+
+by Theorem 2, and together with q0|t1 ≪ pθ 
+
+> 0|t1
+
+from the hypotheses, we get 
+
+P ⋆ 
+
+> 0,[t1,t 2]
+
+≪ P θ
+
+> 0,[t1,t 2]
+
+. This then ensures that the Radon–Nikodym derivatives below are well defined. First, negating the ELBO definition (17) and averaging over z0 ∼ q0 expresses the average NELBO as a Radon–Nikodym identity thanks to the first joint factorization above, giving NELBO [t1,t 2](θ) = 
+
+Z
+
+log dP ⋆
+
+> [t1,t 2]|0
+
+(· | z0)
+
+dP θ
+
+> 0,[t1,t 2]
+
+(z0, ·) (z[t1,t 2]) P ⋆
+
+> 0,[t1,t 2]
+
+(z0, dz [t1,t 2]).
+
+Since q0 is the z0-marginal of P ⋆ 
+
+> 0,[t1,t 2]
+
+and H(q0) = −Eq0 log q0(Z0), subtracting H(q0) inserts the factor q0(z0) into the numerator. By the same factorization, the integrand becomes the joint Radon–Nikodym derivative, so NELBO [t1,t 2](θ) − H(q0) = 
+
+Z
+
+log dP ⋆
+
+> 0,[t1,t 2]
+
+dP θ
+
+> 0,[t1,t 2]
+
+dP ⋆ 
+
+> 0,[t1,t 2]
+
+= KL 
+
+
+
+P ⋆ 
+
+> 0,[t1,t 2]
+
+P θ
+
+> 0,[t1,t 2]
+
+
+
+.
+
+Next, by the Markov property, the conditional law of Z0 given the whole window trajectory 
+
+Z[t1,t 2] depends on that trajectory only through its left endpoint Zt1 :Law( Z0 | Z[t1,t 2]) = q0|t1 (· | Zt1 ).
+
+Hence the joint noising law also factors as 
+
+P ⋆
+
+> 0,[t1,t 2]
+
+(z0, dz [t1,t 2]) = P ⋆
+
+> [t1,t 2]
+
+(dz [t1,t 2]) q0|t1 (z0 | zt1 ). (38) With both joint laws factored in the same order, the Radon–Nikodym derivative factorizes, 
+
+dP ⋆
+
+> 0,[t1,t 2]
+
+dP θ
+
+> 0,[t1,t 2]
+
+(z0, z [t1,t 2]) = dP ⋆
+
+> [t1,t 2]
+
+dP θ
+
+> [t1,t 2]
+
+(z[t1,t 2]) q0|t1 (z0 | zt1 )
+
+pθ 
+
+> 0|t1
+
+(z0 | zt1 ) , P ⋆
+
+> 0,[t1,t 2]
+
+-a.s. Taking logs and integrating against P ⋆ 
+
+> 0,[t1,t 2]
+
+splits the joint divergence into a window term and an endpoint-kernel term, KL 
+
+
+
+P ⋆ 
+
+> 0,[t1,t 2]
+
+P θ
+
+> 0,[t1,t 2]
+
+
+
+= KL 
+
+
+
+P ⋆ 
+
+> [t1,t 2]
+
+P θ
+
+> [t1,t 2]
+
+
+
++ Eqt1
+
+h
+
+KL 
+
+
+
+q0|t1 (· | zt1 ) pθ 
+
+> 0|t1
+
+(· | zt1 )
+
+i 
+
+,
+
+the last expectation being over zt1 ∼ qt1 , the time-t1 marginal of P ⋆
+
+> [t1,t 2]
+
+; this proves (25). Finally, as in the previous proof, the path KL is the sum of the terminal prior KL and the integrated jump-rate divergence by Theorem 2, giving (26). 38 Remark 1 (The arrow of time and independent mechanisms) . These results have an intriguing connection to the independent mechanisms principle from causal inference [SJP +12]. At the path-law level there is no asymmetry between the two time directions (a process is Markov in forward time if and only if it is Markov in reverse time). In the forward direction, the description factorizes into two independent mechanisms: an initial condition (the data law q0) and a dynamical law (the generator Qt), chosen without knowledge of each other — the noising mechanism contains no infor-mation about the data. Backward, this independence is destroyed: by (14), the reverse generator 
+
+bQt(x, y ) = Qt(y, x ) qt(y) 
+
+> qt(x)
+
+requires the marginals qt and hence the data law. Janzing et al. [JCS16] derive the thermodynamic arrow of time from precisely this independence of initial state and dy-namics. A similar logic — asymmetry through restriction of the model class — underlies causal direction detection in time series: a process representable by mechanisms driven by independent noise in one direction generically admits no such representation in the other, which is what renders the direction identifiable [PJGS09, PJS13]. Our view on discrete diffusion is an instance of this asymmetry: the forward process belongs to the small class of data-independent, position-factorized mechanisms, whereas its reversal, whenever q0 is correlated across positions, exists only in the larger class of data-dependent generators — and the purpose of training is to supply that dependence. The present framework explicitly quantifies the breakdown: the mutual information I(Z0; Zt) measures how much data-dependence the reverse generator must carry at time t, and Theorem 4 identifies the oracle integrand J ⋆t = − ddt I(Z0; Zt) as the rate at which the forward mechanism’s independence leaks into the required reverse mechanism. The violation of independence under reversal thus has a conserved total — the universal floor H(pdata ) of Corollary 3, the total mechanism-dependence any reverse process must reconstruct — while the choice of noising process controls only when along the trajectory it is paid (Figure 2). 
+
+5.6 A Bregman-divergence and generator-matching view 
+
+These results are instances of standard Bregman identities. A strictly convex, differentiable poten-tial F generates DF (a, b ) = F (a) − F (b) − F ′(b)( a − b). The local rate divergence Φ is generated by the negative-entropy potential 
+
+F (u) = u log u − u, F ′(u) = log u. 
+
+For any Bregman divergence DF , the conditional mean B⋆ = E[A | G] minimizes E[DF (A, b (G))] over G-measurable predictors and satisfies E[DF (A, B )] = E[DF (A, B ⋆)] + E[DF (B⋆, B )] [BGW05]. Lemma 2 specializes this identity to F (u) = u log u − u; Theorem 5 and Proposition 2 apply it with 
+
+A = bQt(zt, y | Z0) and G = Zt. The optimal rate (32) is therefore the marginal generator obtained by posterior-averaging the clean-conditioned generators, as in Generator Matching [HHY +25]. It is also the jump-process analogue of flow matching [GRS +24]: the regressed object is a reverse intensity and the divergence is Φ rather than the squared Euclidean norm. The following remark makes this correspondence exact. 
+
+Remark 2 (The continuous-diffusion analogue) . Nothing in the Oracle Distance is specific to finite state spaces. Let the noising process be a Markov diffusion dZ t = ft(Zt) dt + σt(Zt) dW t on Rd,with Z0 ∼ q0, ( Wt)t a standard Brownian motion, and at := σtσT 
+
+> t
+
+. Under standard smoothness and nondegeneracy assumptions, the reverse-time process is again a diffusion with the same diffusion matrix and, written at forward time t, the reversed drift 
+
+bbt(z) = −ft(z) + ∇· at(z) + at(z) ∇ log qt(z), (∇· at)i = P 
+
+> j
+
+∂j (at)ij ;39 conditioning on the clean data replaces the marginal by the forward kernel, bbt(z | z0) = −ft(z) + ∇· 
+
+at(z) + at(z) ∇ log qt|0(z | z0). The score ∇ log qt thus plays the role of the marginal reverse rate bQt,and ∇ log qt|0 that of the computable clean-conditioned target. The two ingredients then translate verbatim. For reverse processes sharing the diffusion matrix, Girsanov’s theorem plays the role of Theorem 2, with a quadratic drift energy in place of Φ: KL 
+
+
+
+P ⋆  
+
+> [0 ,T ]
+
+P θ 
+
+> [0 ,T ]
+
+
+
+= KL 
+
+
+
+qT pθT
+
+
+
++ 12
+
+Z T
+
+> 0
+
+Eqt
+
+h  bbt − bbθt
+
+Ta−1
+
+> t
+
+ bbt − bbθt
+
+
+
+(Zt)
+
+i
+
+dt. 
+
+The projection of Theorem 5 becomes a weighted L2 projection, whose optimizer among Zt-measurable drifts is again the conditional mean, 
+
+bbθ⋆ t (z) = E
+
+hbbt(Zt | Z0) Zt = z
+
+i
+
+= bbt(z),
+
+the drift form of Fisher’s identity ∇ log qt(z) = E∇ log qt|0(z | Z0) Zt = z. With matched end-points, the population identity then reads exactly as Corollary 1, NELBO [0 ,T ](θ) = H(q0) + 12
+
+Z T
+
+> 0
+
+Eqt
+
+h
+
+σ−1
+
+> t
+
+ bbt − bbθt
+
+(Zt) 2i
+
+dt, 
+
+with H(q0) now the differential entropy. Training on a window [ t1, t 2] ⊂ (0 , T ) with a terminal prior pθt2 and a reconstruction decoder pθ 
+
+> 0|t1
+
+gives, exactly as in Theorem 3, NELBO [t1,t 2](θ) − H(q0) = Eqt1
+
+h
+
+KL 
+
+
+
+q0|t1 (· | zt1 ) pθ 
+
+> 0|t1
+
+(· | zt1 )
+
+i 
+
++ KL 
+
+
+
+P ⋆ 
+
+> [t1,t 2]
+
+P θ
+
+> [t1,t 2]
+
+
+
+,
+
+with the terminal mismatch KL  qt2 pθt2
+
+ again sitting inside the path KL. Table 1 collects the dictionary. 
+
+finite-state CTMC continuous diffusion 
+
+Forward infinitesimal object generator Qt(x, y ) generator ft · ∇ + 12 at:∇2
+
+True reverse object reverse rate bQt(zt, y ) reverse drift bbt(z), or score ∇ log qt(z)Tractable conditional target bQt(zt, y | z0) bbt(z | z0), or ∇ log qt|0(z | z0)Path-KL divergence Φ( a, b ) = a log ab − a + b 12 (u − v)Ta−1 
+
+> t
+
+(u − v)Path-KL formula Girsanov formula and relative entropy (Theorem 2) Girsanov’s theorem Population optimizer E
+
+h bQt(zt, y | Z0) Zt = zt
+
+i
+
+E
+
+hbbt(z | Z0) Zt = z
+
+i
+
+NELBO meaning data entropy + reverse path KL, plus the two boundary mismatches Table 1: The discrete/continuous diffusion dictionary: the same path structure throughout, with jump rates and the rate divergence Φ replaced by reverse drifts and the quadratic Girsanov energy. 40 6 Sequence modeling 
+
+In this section, Q denotes sequence-level rates and R single-token rates. Forward noising factors over positions, but correlations in the clean-data law mean that the unconditional noisy marginal 
+
+qt generally does not. Only the conditional kernel qt|0(· | z0) factors. 
+
+6.1 Token-factorizable noising processes 
+
+We first state the CTMC result behind the token-wise formulas. Let Xi be finite and 
+
+X := X1 × · · · × X L.
+
+We recall that a time-inhomogeneous CTMC on any given finite X has generator Qt and transition kernel qt|s(y | x) if and only if they satisfy the forward Kolmogorov equation 
+
+∂tqt|s(y | x) = X
+
+> r∈X
+
+qt|s(r | x)Qt(r, y ), qs|s(y | x) = 1{x = y}.
+
+Theorem 6 (Product CTMCs) . Suppose coordinate 1 ≤ i ≤ L has generator Rit on Xi, with transition kernel qit|s. Define the product kernel 
+
+qt|s(y | x) := 
+
+> L
+
+Y
+
+> i=1
+
+qit|s(yi | xi), x, y ∈ X .
+
+Then, its unique infinitesimal generator is given by 
+
+Qt(x, y ) = 
+
+> L
+
+X
+
+> i=1
+
+(Qt)i(x, y ), (Qt)i(x, y ) = 1{x−i = y−i} Rit(xi, y i),
+
+where x−i denotes the vector of all coordinates of x excluding the i-th. Conversely, any process with generator of the displayed form has this product transition kernel, i.e., it factors over positions. Proof. First, Qt is a generator: if x̸ = y, then Qt(x, y ) ≥ 0, since the only possible nonzero terms are off-diagonal entries of the coordinate generators. Moreover, 
+
+X
+
+> y∈X
+
+Qt(x, y ) = 
+
+> L
+
+X
+
+> i=1
+
+X
+
+> y∈X
+
+1{x−i = y−i} Rit(xi, y i) = 
+
+> L
+
+X
+
+> i=1
+
+X
+
+> u∈X i
+
+Rit(xi, u ) = 0 .
+
+Thus the diagonal entries are the negative row sums of the off-diagonal entries. Second, it remains to check the Kolmogorov equation. Since each coordinate kernel satisfies the Kolmogorov equation for Xi,
+
+∂tqit|s(yi | xi) = X
+
+> u∈X i
+
+qit|s(u | xi)Rit(u, y i),
+
+differentiating the full kernel product gives 
+
+∂tqt|s(y | x) = 
+
+> L
+
+X
+
+> i=1
+
+∂tqit|s(yi | xi) Y 
+
+> j̸=i
+
+qjt|s(yj | xj ) = 
+
+> L
+
+X
+
+> i=1
+
+X
+
+> u∈X i
+
+qit|s(u | xi)Rit(u, y i) Y 
+
+> j̸=i
+
+qjt|s(yj | xj ).
+
+41 Reciprocally, from the definitions of qt|s and of Qt, we have 
+
+X
+
+> z∈X
+
+qt|s(z | x)Qt(z, y ) = X
+
+> z∈X
+> L
+
+Y
+
+> j=1
+
+qjt|s(zj | xj )
+
+> L
+
+X
+
+> i=1
+
+1{z−i = y−i}Rit(zi, y i)=
+
+> L
+
+X
+
+> i=1
+
+X
+
+> z∈X
+
+1{z−i = y−i}
+
+> L
+
+Y
+
+> j=1
+
+qjt|s(zj | xj )Rit(zi, y i)=
+
+> L
+
+X
+
+> i=1
+
+X
+
+> u∈X i
+
+qit|s(u | xi) Y 
+
+> j̸=i
+
+qjt|s(yj | xj )Rit(u, y i),
+
+which is exactly the derivative computed above. The initial condition also holds: 
+
+qs|s(y | x) = 
+
+> L
+
+Y
+
+> i=1
+
+1{xi = yi} = 1{x = y}.
+
+Therefore qt|s solves the Kolmogorov forward equation with generator Qt. By uniqueness of solu-tions to finite-dimensional linear ODEs, this is the transition kernel associated with Qt. For the converse, any process with a generator of the displayed sum form solves the same forward Kol-mogorov equation; its solution is unique, and the product kernel above is one such solution, so the transition kernel necessarily factors over positions. Almost all instances of discrete diffusion modeling on sequences [HNJ +21, AJH +21, CBDB +22, LME24, SHW +24, vRFD +25, SSP +25, SDG +25, SLY +26] are product CTMCs like the ones de-scribed above, i.e., the forward noising process is token-wise independent. Since the clean-data law 
+
+q0 is generally correlated across positions, neither the unconditional marginals qt nor the uncon-ditional backward kernels factor. But if we stay clean-conditioned, then the reverse process does factor: for s < t , Bayes’ rule gives 
+
+qs|t, 0(zs | zt, z 0) = qs|0(zs | z0)qt|s(zt | zs)
+
+qt|0(zt | z0) =
+
+> L
+
+Y
+
+> i=1
+
+qis|0(zis | zi
+
+> 0
+
+)qit|s(zit | zis)
+
+qit|0(zit | zi
+
+> 0
+
+) =
+
+> L
+
+Y
+
+> i=1
+
+qis|t, 0(zis | zit, z i
+
+> 0
+
+).
+
+Thus, we can apply the product-CTMC theorem to the factorized clean-conditioned backward process qs|t, 0 = QLi=1 qis|t, 0 to obtain the backward bridge rates bQt(· | z0) = PLi=1 ( bQt)i(· | z0). For a jump from the noisy sequence zt to the sequence y with yi̸ = zit, the corresponding true token-wise backward bridge rate is 
+
+ai(t, z 0, z t, y ) := ( bQt)i(zt, y | z0) = 1{z−it = y−i}Rit(yi, z it) qit|0(yi | zi
+
+> 0
+
+)
+
+qit|0(zit | zi
+
+> 0
+
+) . (39) These will be the target rates appearing inside the token-wise CTMC ELBO loss. 
+
+6.2 Three exact token-wise factorizations of the reverse rate 
+
+For the remainder of these notes, let 
+
+z0 = ( z10 , . . . , z L 
+
+> 0
+
+) ∈ X , zi 
+
+> 0
+
+∈ X i,
+
+42 where zi 
+
+> 0
+
+is the clean token at position i, and eℓ denotes the ℓ-th element of the per-position vocabulary Xi (so ℓ ranges over 1 ≤ ℓ ≤ |X i|). The forward kernel is assumed to factor over tokens, but the data distribution q0 need not. The following are three exact factorizations of the oracle reverse rate and are thus the starting point for the token-wise ELBO. Fix a sequence position i and a candidate sequence y with yi̸ = zit. The clean-token posterior at position i is 
+
+π⋆i (eℓ | zt, t ) := q(Zi 
+
+> 0
+
+= eℓ | Zt = zt). (40) This is the standard denoiser target. Bayes’ rule isolates the analytic i-th-token forward kernel from the remaining sequence: 
+
+π⋆i (eℓ | zt, t ) = q(Zi 
+
+> 0
+
+= eℓ, Z t = zt)
+
+q(Zt = zt) =
+
+P 
+
+> z0:zi
+> 0=eℓ
+
+q0(z0) Q 
+
+> j
+
+qjt|0(zjt | zj
+
+> 0
+
+)
+
+P 
+
+> z0
+
+q0(z0) Q 
+
+> j
+
+qjt|0(zjt | zj
+
+> 0
+
+)= qit|0(zit | eℓ) P
+
+> z−i
+> 0
+
+q0(eℓ, z −i 
+
+> 0
+
+) Q  
+
+> j̸=i
+
+qjt|0(zjt | zj
+
+> 0
+
+)
+
+P 
+
+> r
+
+qit|0(zit | er) P
+
+> z−i
+> 0
+
+q0(er, z −i 
+
+> 0
+
+) Q  
+
+> j̸=i
+
+qjt|0(zjt | zj
+
+> 0
+
+) ,
+
+where ( eℓ, z −i 
+
+> 0
+
+) is the sequence with i-th token eℓ and the remaining tokens from z0. It turns out that the common factor given by the sum over z−i 
+
+> 0
+
+can be interpreted in simple terms, motivating the following definition. Define the cavity law 
+
+μ⋆i (eℓ | z−it , t ) := q(Zi 
+
+> 0
+
+= eℓ | Z−it = z−it ). (41) It conditions on the noisy context z−it but not the local noisy token zit. Expanding by Bayes’ rule, 
+
+μ⋆i (eℓ | z−it , t ) = q(Zi 
+
+> 0
+
+= eℓ, Z −it = z−it )
+
+q(Z−it = z−it ) =
+
+P 
+
+> z0:zi
+> 0=eℓ
+
+q(Z0 = z0, Z −it = z−it )
+
+P 
+
+> z0
+
+q(Z0 = z0, Z −it = z−it )=
+
+P
+
+> z−i
+> 0
+
+q0(eℓ, z −i 
+
+> 0
+
+) Q  
+
+> j̸=i
+
+qjt|0(zjt | zj
+
+> 0
+
+)
+
+P
+
+> r
+
+P
+
+> z−i
+> 0
+
+q0(er, z −i 
+
+> 0
+
+) Q  
+
+> j̸=i
+
+qjt|0(zjt | zj
+
+> 0
+
+) .
+
+Thus, the denoiser is the cavity law reweighted by the forward kernel on the local token: 
+
+π⋆i (eℓ | zt, t ) ∝ μ⋆i (eℓ | z−it , t ) qit|0(zit | eℓ). (42) We may interpret this relation as the update that the denoiser given only the noisy context z−it (the cavity law) obtains after observing as well the local noisy token zit. That required update turns out to be given by the local forward kernel. Equivalently, for any f ,
+
+Eπ⋆i (eℓ|zt,t )[f (eℓ)] = 
+
+Eμ⋆i (eℓ|z−it ,t )
+
+h
+
+f (eℓ) · qit|0(zit | eℓ)
+
+i
+
+Eμ⋆i (eℓ|z−it ,t )
+
+h
+
+qit|0(zit | eℓ)
+
+i . (43) The denominator in this expression is the local noisy token likelihood given the noisy context: 
+
+Eμ⋆i (eℓ|z−it ,t )
+
+h
+
+qit|0(w | eℓ)
+
+i
+
+= X
+
+> ℓ
+
+q(Zi 
+
+> 0
+
+= eℓ | z−it ) q(Zit = w | Zi 
+
+> 0
+
+= eℓ) = q(Zit = w | z−it ). (44) 43 Define lastly the i-th concrete score as 
+
+s⋆i (zit, y i | z−it , t ) := q(Zit = yi | Z−it = z−it )
+
+q(Zit = zit | Z−it = z−it ) = qt(yi, z −it )
+
+qt(zt) , (45) where the second equality uses Bayes’ rule to cancel the common Z−it = z−it conditioning. It turns out that the three quantities π⋆i , μ⋆i , and s⋆i subsume the different ELBO parameteri-zations in the literature, and they each are sufficient to express the unconditional reverse rate in terms of forward laws. To see this, we compute the ELBO-optimal rate for each token position i,which, by Theorem 5, is the average of the reverse conditional rate (39): ( bQt)i(zt, y ) = Eq0|t(z0|zt)
+
+h
+
+( bQt)i(zt, y | z0)
+
+i
+
+= Eq0|t(z0|zt)
+
+
+
+1{z−it = y−i} Rit(yi, z it) qt|0(y | z0)
+
+qt|0(zt | z0)
+
+
+
+= 1{z−it = y−i} Rit(yi, z it) Eq0|t(z0|zt)
+
+" Q  
+
+> j
+
+qjt|0(yj | zj
+
+> 0
+
+)
+
+Q 
+
+> j
+
+qjt|0(zjt | zj
+
+> 0
+
+)
+
+#
+
+= 1{z−it = y−i}Rit(yi, z it) X
+
+> ℓ
+
+π⋆i (eℓ | zt, t ) qit|0(yi | eℓ)
+
+qit|0(zit | eℓ) .
+
+The last two steps use qt|0 = Q 
+
+> j
+
+qjt|0 and y−i = z−it , which cancel all j̸ = i factors. 
+
+Remark 3 (Support of the denoiser law) . In the last step of the previous calculation and through-out the remainder of the paper, we use the convention that terms with both numerator π⋆i (eℓ |
+
+zt, t ) = 0 and denominator qit|0(zit | eℓ) = 0 contribute zero. In reality, Bayes’ rule excludes such terms: they would only arise from incorrectly applying Bayes’ rule at a token zit outside of the support of Zit , that is, a.s. unreachable from clean data via the forward kernel. In particular, if we define the reverse support 
+
+Si(zit, t ) := {ℓ : qit|0(zit | eℓ) > 0}, (46) we have supp π⋆i (· | zt, t ) ⊆ S i(zit, t ). (47) Thus, the i-th optimal rate depends on the clean-data posterior only through its i-th marginal 
+
+π⋆i or equivalently μ⋆i or s⋆i , enabling per-token rate parameterizations. This is precisely what allows factorized, per-token modeling of the reverse rate, making discrete diffusion tractable. To conclude, we now see how the token-wise unconditional reverse rates can be written in terms of π⋆i , μ⋆i , or s⋆i via ( bQt)i(zt, y ) = 1{z−it = y−i} Rit(yi, z it) X
+
+> ℓ
+
+π⋆i (eℓ | zt, t ) qit|0(yi | eℓ)
+
+qit|0(zit | eℓ) (48) = 1{z−it = y−i} Rit(yi, z it)
+
+Eμ⋆i (eℓ|z−it ,t )
+
+h
+
+qit|0(yi | eℓ)
+
+i
+
+Eμ⋆i (eℓ|z−it ,t )
+
+h
+
+qit|0(zit | eℓ)
+
+i (49) = 1{z−it = y−i} Rit(yi, z it) s⋆i (zit, y i | z−it , t ). (50) 44 The second equality uses (43); the third uses (44). These are exact factorized forms of the uncon-ditional reverse rate, in the denoiser, cavity, and score coordinates respectively. Each leads to a different expression of the reverse rates by choosing a neural network head to model the respective law, and thus, by the Kolmogorov forward equation, each determines a unique reverse CTMC. In particular, the coordinates differ only in the algebra of the neural network head-to-rate map, given by the three displayed equations above. 
+
+6.3 Parameterizations in the literature 
+
+The literature models the reverse process in one of the three coordinates of Theorem 7; the popula-tion optimum of each is the matching law π⋆i , μ⋆i , or s⋆i . For each we record the model reverse rate aθi
+
+that enters the CTMC ELBO and the finite-step ancestral sampler it induces (whose parallel-token error is isolated in Figure 6). The samplers share one template: a tractable reverse step uses the token-factorized ansatz 
+
+pθs|t(zs | zt) := 
+
+> L
+
+Y
+
+> i=1
+
+pθ(zis | zt), (51) whose factors are the exact coordinate marginals q(zis | zt) at the oracle and approximate only through the forced product over positions; as s ↑ t simultaneous coordinate changes have probability 
+
+O(( t − s)2), so all three coordinates induce the same reverse-CTMC generator. 
+
+Denoiser [AJH +21, HNJ +21, CBDB +22, SAS +24, SHW +24]. A head πθi ≈ π⋆i gives the reverse rate 
+
+aθi, denoiser (t, z t, y ) := 1{z−it = y−i} Rit(yi, z it) X
+
+> ℓ
+
+πθi (eℓ | zt, t ) qit|0(yi | eℓ)
+
+qit|0(zit | eℓ) . (52) Conditioning on Zi 
+
+> 0
+
+and applying Bayes’ rule to the single-token bridge gives the exact identity 
+
+q(zis | zt) = qit|s(zit | y) P 
+
+> ℓ
+
+π⋆i (eℓ | zt, t ) qis|0(y | eℓ)/q it|0(zit | eℓ), hence the finite-step sampler 
+
+pθ
+
+> denoiser
+
+(Zis = y | zt) := qit|s(zit | y) X
+
+> ℓ
+
+πθi (eℓ | zt, t ) qis|0(y | eℓ)
+
+qit|0(zit | eℓ) . (53) Continuing the discussion from Remark 3, we again need the convention that 0 /0 := 0. However, for a learned denoiser it is not guaranteed that supp πθi (· | zt, t ) ⊆ S i(zit, t ).
+
+Contrary to this, the cavity rate (55) never divides by per-token likelihood, and out-of-support tokens vanish on their own thanks to the Bayes weight qit|0(zit | eℓ) = 0. Thus, a cavity head is 
+
+automatically confined to Si, whereas a denoiser head must learn to vanish off Si (or be masked to it by hand) to keep the rate finite, already pointing to the practical difficulty of training denoiser heads in discrete diffusion. This also reflects the importance of fixing the jump support: when Si(zit, t ) does not vary on [t1, t 2], the out-of-support tokens can be excluded once and for all. In masked diffusion the support is the whole vocabulary at a masked position and the single clean token at a revealed one (which has no reverse jump), so the restriction is automatic; in uniform diffusion it is the entire vocabulary for every t > 0 and collapses only at t = 0, so a denoiser head must concentrate on the true token exactly as t ↓ 0, which is precisely where an uninformative one diverges (Proposition 6). 45 Cavity [vRFD +25, GJS +26, SSP +25, SDG +25, SLY +26]. A head μθi ≈ μ⋆i induces the noisy laws at times t and s,
+
+mθi (y | zt, t ) := X
+
+> ℓ
+
+μθi (eℓ | z−it , t ) qit|0(y | eℓ), mθi,t →s(y | zt, t ) := X
+
+> ℓ
+
+μθi (eℓ | z−it , t ) qis|0(y | eℓ),
+
+(54) and hence the reverse rate 
+
+aθi, cavity (t, z t, y ) := 1{z−it = y−i} Rit(yi, z it) mθi (yi | zt, t )
+
+mθi (zit | zt, t ) . (55) At the ideal cavity law, m⋆i and m⋆i,t →s are the true context-conditioned noisy marginals q(Zit | z−it )and q(Zis | z−it ), and Bayes’ rule gives the ancestral sampler 
+
+pθ
+
+> cavity
+
+(Zis = y | zt) := qit|s(zit | y) mθi,t →s(y | zt, t )
+
+mθi (zit | zt, t ) . (56) Although often presented as a clean-token denoiser, this head is ELBO-optimized by the cavity law 
+
+μ⋆i , not by π⋆i .
+
+Score [MCSE22, SYD +23, LME24, ONX +25, ZZZ +25]. A head sθi ≈ s⋆i gives the reverse rate 
+
+aθi, score (t, z t, y ) := 1{z−it = y−i} Rit(yi, z it) sθi (zit, y i | z−it , t ), (57) whose path loss is exactly SEDD’s diffusion-weighted denoising score entropy [LME24], with the forward rate Rit a forced (not auxiliary) weight; we derive this, with its masked RADD specialization, in §7. For a finite step, a score head is converted to a denoiser or cavity head (Proposition 3) and sampled as one of those. 
+
+Converting between coordinates. Each head attains the oracle rate when it matches its target 
+
+π⋆i , μ⋆i , or s⋆i , so all three reach the same ELBO optimum under sufficient capacity; off the optimum they are interconvertible wherever the relevant likelihood is positive. This equivalence, and the penalty for reading a head in the wrong coordinate without converting, are confirmed numerically in Figure 5 and Table 6. 
+
+Proposition 3 (Coordinate conversions) . Write wℓ := qit|0(zit | eℓ) and let qit|0 ≡ [ qit|0(w | eℓ) ] ℓ,w be the single-token forward channel; throughout, distributions are row vectors acting on kernels from the left. The denoiser, cavity, and score heads are interconverted by 
+
+μθi (eℓ) ∝ πθi (eℓ)
+
+wℓ
+
+, πθi (eℓ) ∝ μθi (eℓ) wℓ, sθi = mθi (yi)
+
+mθi (zit) , mθi = μθi qit|0, (58) 
+
+with mθi (y) ∝ sθi (zit, y ) when starting from a score. The denoiser ↔cavity maps require wℓ > 0; the score →cavity map requires qit|0 to have full row rank and returns a probability vector iff μθi ≥ 0.Proof. The cavity-to-denoiser map is the local Bayes update (42), πθi ∝ μθi wℓ; inverting it gives 
+
+μθi ∝ πθi /w ℓ wherever wℓ > 0. By (45) the score is the ratio mθi (yi)/m θi (zit) of the cavity-induced marginal mθi = μθi qit|0, so either distribution head determines it. Conversely the score fixes mθi up to scale, mθi (y) ∝ sθi (zit, y ) (normalized to a probability vector), and μθi is then the unique solution of the linear system mθi = μθi qit|0 whenever qit|0 has full row rank. 46 The maps into the score are always available, while recovering a distribution coordinate from a score needs an invertible channel and a non-negative solution. Where some wℓ = 0, the visible states of masked diffusion, the denoiser cannot recover the corresponding cavity mass. We instantiate all of these conversions in closed form for the interpolating family in Corollary 5. from \ to denoiser πθi cavity μθi score sθi
+
+denoiser πθi — ∝ πθi (eℓ)/w ℓ (58) ∗ P 
+
+> ℓ
+
+πθi (eℓ) qit|0(yi | eℓ)/w ℓ
+
+cavity μθi ∝ μθi (eℓ) wℓ (42) — mθi (yi)/m θi (zit)score sθi via μθi , then (42) solve † mθi = μθi qit|0 —Table 2: Conversions between coordinates (Proposition 3), with wℓ := qit|0(zit | eℓ) and mθi (yi) = 
+
+P 
+
+> ℓ
+
+μθi (eℓ) qit|0(yi | eℓ). ∗Wherever wℓ > 0. †Recover mθi (·) ∝ sθi (zit, ·) by normalization, then solve the linear system; the inverse is unique if and only if qit|0, arranged as a matrix with normalized rows, has full row rank. The section’s main theorem records the conclusion: one optimizer, three exact coordinates. 
+
+Theorem 7 (The reverse rate in three coordinates) . For a product-CTMC noising process the path ELBO (18) is uniquely minimized by the unconditional reverse rate bQt (Theorem 5). On a one-token jump zt → y (y−i = z−it , yi̸ = zit), through the denoiser, cavity, and score laws π⋆i , μ ⋆i , s ⋆i
+
+of (40) , (41) , (45) , it admits the three equal forms (all carrying 1{z−it = y−i})
+
+( bQt)i(zt, y ) = Rit(yi, z it) Eπ⋆i (eℓ|zt,t )
+
+" qit|0(yi | eℓ)
+
+qit|0(zit | eℓ)
+
+#
+
+(48) , denoiser 
+
+= Rit(yi, z it)
+
+Eμ⋆i (eℓ|z−it ,t )
+
+h
+
+qit|0(yi | eℓ)
+
+i
+
+Eμ⋆i (eℓ|z−it ,t )
+
+h
+
+qit|0(zit | eℓ)
+
+i (49) , cavity 
+
+= Rit(yi, z it) s⋆i (zit, y i | z−it , t ) (50) , score. 
+
+Table 3 collects the dictionary: the learned target, the induced model rate, the literature methods each coordinate corresponds to, and the failure mode each invites. The practical upshot is a single rule, use a head in the coordinate its loss optimizes, or convert analytically , which the rest of the paper makes concrete: a denoiser head fed into the cavity ansatz (56) silently optimizes the cavity law μ⋆i rather than the denoiser π⋆i ; the two are related by the closed-form Bayes update (58). We conclude the section with a calibration result for the cavity ELBO which can be of extreme practical utility, since it allows end-to-end testing of the ELBO implementation at initialization. 
+
+Proposition 4 (Uninformative cavity NELBO) . Fix [t1, t 2] ⊂ (0 , T ), assume all positions share a common clean vocabulary Xi = Y with V = |Y| , and let the cavity law be uniform on Y:
+
+μθi (eℓ | z−it , t ) ≡ 1
+
+V .
+
+47 Let punif -fwd 0 be the uniform law on YL, let punif -fwd  
+
+> t
+
+be its forward image under qt|0, and choose the boundary laws pθt2 = punif -fwd  
+
+> t2
+
+, p θ 
+
+> 0|t1
+
+= punif -fwd 0|t1 . Then, for every sequence z0 ∈ Y L,
+
+NELBO [t1,t 2](θ; z0) = L log V. (59) 
+
+Proof. It suffices to treat one position. The Y-uniform cavity head induces the noisy marginal 
+
+mθ(y | zt, t ) = 1
+
+> V
+
+X
+
+> ℓ
+
+qt|0(y | eℓ) = punif-fwd  
+
+> t
+
+(y),
+
+so by (55) the model rate equals the oracle reverse rate (32) of the noising process punif-fwd (the forward kernel started from punif-fwd 0 ). With the matching boundary laws pθt2 = punif-fwd  
+
+> t2
+
+and pθ 
+
+> 0|t1
+
+=
+
+punif-fwd 0|t1 , Corollary 3 applied to punif-fwd makes the ELBO tight NELBO [t1,t 2](θ; eℓ) = − log punif-fwd 0 (eℓ) = log V, 
+
+and the L positions factor to give NELBO [t1,t 2](θ; z0) = L log V .This gives a calibration check only when the boundary laws are included as stated: an exactly uniform cavity head then has per-token NELBO log V . With different reconstruction or terminal priors, the path-rate calibration still holds but the full NELBO need not equal L log V . If the forward process has erased all information about z0 by t2, symmetry makes the usual terminal law 
+
+qt2 equal to punif-fwd  
+
+> t2
+
+for an i.i.d. token-wise kernel. 
+
+Denoiser Cavity Score 
+
+Symbol π⋆i (eℓ | zt, t ) μ⋆i (eℓ | z−it , t ) s⋆i (zit, y i | z−it , t )Definition q(Zi 
+
+> 0
+
+= eℓ | zt) q(Zi 
+
+> 0
+
+= eℓ | z−it ) qt(yi, z −it )
+
+qt(zt)Reverse rate †
+
+( bQθt )i(zt, y )
+
+P 
+
+> ℓ
+
+πθi (eℓ) qit|0(yi | eℓ)
+
+qit|0(zit | eℓ)
+
+P 
+
+> ℓ
+
+μθi (eℓ)qit|0(yi | eℓ)
+
+P 
+
+> ℓ
+
+μθi (eℓ) qit|0(zit | eℓ) sθi (zit, y i)Sampling ‡
+
+pθ(zis | zt)
+
+P 
+
+> ℓ
+
+πθi (eℓ) qis|0(zis | eℓ)
+
+qit|0(zit | eℓ)
+
+P 
+
+> ℓ
+
+μθi (eℓ)qis|0(zis | eℓ)
+
+P 
+
+> ℓ
+
+μθi (eℓ) qit|0(zit | eℓ) via denoiser/cavity Recovers MDLM, D3PM, MD4 [AJH +21, HNJ +21, CBDB +22, SAS +24, SHW +24] UDLM, GIDD, Duo [vRFD +25, GJS +26, SSP +25, SDG +25, SLY +26] SEDD, RADD, TCSM [MCSE22, SYD +23, LME24, ONX +25, ZZZ +25] Table 3: The reverse rate in three coordinates (Theorem 7) and the matching ancestral-sampling step. Reverse rates (52)–(57) and sampling steps (53),(56) are shown with arguments (· | zt, t ) suppressed and πθi supported on Si(zit, t ). The cavity entries use the cavity-induced noisy marginal mθi (·) = P 
+
+> ℓ
+
+μθi (eℓ) qit|0(· | eℓ) and its cross-time form mθi,t →s (54). †Reverse rates omit the common prefactor 1{z−it = y−i} Rit(yi, z it); ‡sampling steps pθ(zis = y | zt) omit the common factor 
+
+qit|s(zit | y). 48 7 Masked, uniform, and GIDD noising processes 
+
+The noisy state space Z includes a mask state m for masked and GIDD hybrid diffusion, whereas uniform diffusion uses the clean vocabulary Y; all positions here share this common vocabulary, of size V = |Y| . All processes below use a differentiable, decreasing signal schedule with α0 = 1 and 
+
+α1 = 0. Write 
+
+βt := 1 − αt, λt := − α′
+
+> t
+
+αt
+
+.
+
+7.1 Common CTMC form 
+
+All processes’ forward kernels in this section factor over positions following the general CTMC product structure of Theorem 6. We use the true reverse rate ai from (39) and the denoiser and cavity model rates from (52) and (55), respectively. Below, we suppress unchanged sequence coordinates and write the candidate token yi as y.Leaving the boundary terms from §4 implicit, the CTMC NELBO path integrand is 
+
+J θt (z0, z t) = 
+
+> L
+
+X
+
+> i=1
+
+X
+
+> y∈N i(zt)
+
+Φ
+
+
+
+ai(t, z 0, z t, y ), a θi (t, z t, y )
+
+
+
+, (60) with the neighborhood of z ∈ Z L at position i defined by 
+
+Ni(z) := {y ∈ Z L : y−i = z−i, y i̸ = zi}.
+
+Here aθi denotes either model-rate coordinate above. 
+
+Proposition 5 (Cavity ELBO for source-independent jump rates) . Consider a product CTMC for which the off-diagonal rates at position i depend only on time and destination but not on the source token: 
+
+Rit(yi, x i) = γi(t, x i), xi̸ = yi.
+
+Since the forward jump enters the reverse rate with its destination equal to the current noisy token, the relevant value below is γi(t, z it). Fix z0, z t, and define the true and model noisy marginals by 
+
+di(yi) := qit|0(yi | zi
+
+> 0
+
+), mi(yi) := mθi (yi | zt, t ).
+
+Assuming di(zit), m i(zit) > 0 and the usual rate-support condition bQt(zt, · | z0) ≪ bQθt (zt, ·), the per-position cavity-coordinate contribution to the negative ELBO integrand is 
+
+J cavity  
+
+> i,t
+
+= γi(t, z it)
+
+di(zit)
+
+KL( di ∥ mi) + DIS 
+
+ di(zit) mi(zit) , (61) 
+
+where 
+
+DIS (p ∥ q) := pq − log pq − 1
+
+is the Itakura–Saito divergence. Consequently, the sequence-level cavity-coordinate integrand is 
+
+J cavity  
+
+> t
+
+(z0, z t) = 
+
+> L
+
+X
+
+> i=1
+
+γi(t, z it)
+
+di(zit)
+
+KL( di ∥ mi) + DIS 
+
+ di(zit) mi(zit) . (62) 49 Proof. Every token yi̸ = zit determines a unique sequence y ∈ N i(zt) with y−i = z−it and yi in place of zit. Let x := zit and simplify the notation further by writing m(y) := mi(y) and d(y) := di(y). Equations (39) and (55), together with positive homogeneity of Φ and the source-independence assumption, give 
+
+J cavity  
+
+> i,t
+
+= γi(t, x ) X 
+
+> y̸=x
+
+Φ
+
+ d(y)
+
+d(x) , m(y)
+
+m(x)
+
+
+
+.
+
+Since P  
+
+> y̸=x
+
+d(y) = 1 − d(x) and P  
+
+> y̸=x
+
+m(y) = 1 − m(x) for d and m are probability vectors, we get 
+
+X 
+
+> y̸=x
+
+Φ
+
+ d(y)
+
+d(x) , m(y)
+
+m(x)
+
+
+
+= 1 − m(x)
+
+m(x) − 1 − d(x)
+
+d(x) + 1
+
+d(x)
+
+X 
+
+> y̸=x
+
+d(y) log d(y)m(x)
+
+d(x)m(y)= 1
+
+d(x)
+
+ d(x)
+
+m(x) − 1 + X 
+
+> y̸=x
+
+d(y) log d(y)
+
+m(y) − (1 − d(x)) log d(x)
+
+m(x)
+
+
+
+= 1
+
+d(x)
+
+X 
+
+> y̸=x
+
+d(y) log d(y)
+
+m(y) + d(x)
+
+m(x) − log d(x)
+
+m(x) − 1
+
+
+
+= 1
+
+d(x) [KL( d ∥ m) + DIS (d(x) ∥ m(x))] .
+
+Multiplying by γi(t, x ) proves (61). 
+
+7.2 Masked diffusion 
+
+Let Z = Y ∪ { m}, where m is absorbing. The single-position marginal is 
+
+qit|0(y | zi
+
+> 0
+
+) = αt1{y = zi
+
+> 0
+
+} + βt1{y = m}. (63) As in the previous section, we will denote clean tokens by eℓ, where ℓ = 1 , . . . , V and V = |Y| . For 0 ≤ s < t ≤ 1, the discrete transition kernel is 
+
+qit|s(y | x) = αt
+
+αs
+
+1{y = x} +
+
+
+
+1 − αt
+
+αs
+
+
+
+1{y = m}, x, y ∈ Z . (64) Taking the continuous-time limit, the CTMC has only one kind of forward jump: 
+
+Rt(eℓ, m) = λt. (65) 
+
+CTMC ELBO The only nonzero true reverse jumps go from the mask to the clean token: 
+
+ai(t, z 0, z t, e ℓ) = λt
+
+αt1{eℓ = zi
+
+> 0
+
+, z it = m}
+
+βt
+
+= − α′
+
+> t
+
+βt
+
+1{eℓ = zi
+
+> 0
+
+, z it = m}. (66) In particular, if zit̸ = m, there is no off-diagonal true reverse jump at that position. The induced noisy marginal satisfies 
+
+mθi (m | zt, t ) = βt, mθi (eℓ | zt, t ) = αtμθi (eℓ | z−it , t ),
+
+so the model reverse rate from m to eℓ is 
+
+aθi, cavity (t, z t, e ℓ) = − α′
+
+> t
+
+βt
+
+μθi (eℓ | z−it , t ) 1{zit = m}. (67) 50 Corollary 4 (Masked: denoiser equals cavity) . For masked diffusion the denoiser and cavity laws coincide on every masked position: if zit = m then 
+
+π⋆i (· | zt, t ) = μ⋆i (· | z−it , t ). (68) 
+
+Proof. At a masked position qt|0(m | eℓ) = βt does not depend on ℓ, so the local Bayes update (42) multiplies μ⋆i by a constant and renormalizes; it is therefore the identity, and π⋆i = μ⋆i .The two coordinates then give the same masked reverse rate: a denoiser head πθi yields 
+
+aθi, denoiser (t, z t, e ℓ) = λtV −1X
+
+> r=0
+
+πθi (er | zt, t ) qt|0(eℓ | er)
+
+qt|0(m | er) = − α′
+
+> t
+
+βt
+
+πθi (eℓ | zt, t )1{zit = m},
+
+which is (67) with μθi = πθi . At an unmasked position zit = er the denoiser is the point mass δr
+
+rather than the cavity law, but the masked CTMC has no off-diagonal reverse jump out of an unmasked token, so the distinction never enters the ELBO or the sampler. At a masked position, the local jump divergence reduces exactly to cross-entropy: 
+
+X
+
+> ℓ
+
+Φ
+
+
+
+− α′
+
+> t
+
+βt
+
+1{eℓ = zi
+
+> 0
+
+}, − α′
+
+> t
+
+βt
+
+μθi (eℓ | z−it , t )
+
+
+
+= − α′
+
+> t
+
+βt
+
+X
+
+> ℓ
+
+Φ
+
+
+
+1{eℓ = zi
+
+> 0
+
+}, μ θi (eℓ | z−it , t )
+
+
+
+= − α′
+
+> t
+
+βt
+
+h
+
+− log μθi (zi 
+
+> 0
+
+| z−it , t )
+
+i
+
+.
+
+We conclude 
+
+J mask  
+
+> i,t
+
+(z0, z t) = − α′
+
+> t
+
+βt
+
+1{zit = m}
+
+h
+
+− log μθi (zi 
+
+> 0
+
+| z−it , t )
+
+i
+
+, (69) for both cavity and denoiser parameterizations. In particular, only masked positions contribute to the masked-diffusion CTMC ELBO. 
+
+SEDD and RADD as special cases In score coordinates, denoting the true clean-conditioned 
+
+score by 
+
+σi := qit|0(yi | zi
+
+> 0
+
+)
+
+qit|0(zit | zi
+
+> 0
+
+) ,
+
+and using the positive homogeneity of Φ, the per-jump path cost is Φ ai, a θi, score 
+
+ = Rit(yi, z it) Φ( σi, s θi ) = Rit(yi, z it)sθi − σi log sθi + σi(log σi − 1) . (70) After summing and averaging, this recovers SEDD’s denoising score entropy [LME24]. The last term σi(log σi − 1) is θ-independent, Rit gives SEDD’s weights, and Theorem 5 gives the projected-score optimum 
+
+s⋆i = E[σi | Zt] = qt(yi, z −it )
+
+qt(zt) .
+
+For masked diffusion the only active channel is m → eℓ with weight λt, and the masked concrete score factors as s⋆i (m, e ℓ | z−it , t ) = ( αt/β t) μ⋆i (eℓ | z−it , t ), so the only learnable part is the cavity law, equal to π⋆i on masked positions and, for fixed visible context, time-independent. This also exactly recovers RADD’s reparameterization [ONX +25]. 51 Prior KL term For a single position with clean token zi
+
+> 0
+
+, the natural masked prior is the deterministic mask law 
+
+pnatural  
+
+> t2
+
+= δm.
+
+Using (63) at a given position i,KL MDM natural (t2) := KL 
+
+
+
+qit2|0(· | zi
+
+> 0
+
+) δm
+
+
+
+=
+
+(
+
+0, αt2 = 0 ,
+
++∞, αt2 > 0. (71) If instead the fixed prior is the law obtained by drawing a clean token uniformly and then applying the masked forward kernel to time t2, then 
+
+punif-fwd  
+
+> t2
+
+= βt2 δm + αt2
+
+V
+
+X
+
+> ℓ
+
+δeℓ .
+
+The mask mass cancels in the KL, and only the clean token contributes: KL MDM unif-fwd (t2) := KL 
+
+
+
+qit2|0(· | zi
+
+> 0
+
+) punif-fwd 
+
+> t2
+
+
+
+= αt2 log V. (72) This uniform-forwarded per-token prior gives a finite truncation correction for t2 < 1 and vanishes as t2 ↑ 1. By contrast, the deterministic mask prior has finite KL only at the fully masked endpoint. 
+
+Sampling For a step from t = τj to s = τj−1, evaluate the network at ( zt, t ). A visible token 
+
+zit = eℓ remains eℓ. If zit = m, then 
+
+pθ(Zis = m | zt) = βs
+
+βt
+
+, pθ(Zis = eℓ | zt) = αs − αt
+
+βt
+
+μθi (eℓ | zt, t ), (73) where μθi can be replaced with πθi since they coincide on masked positions. Once unmasked, a token cannot be revised. At the final (nonzero) level t1, keep visible tokens and decode any remaining masks: ˆzi 
+
+> 0
+
+∼
+
+(
+
+δeℓ (·), zit1 = eℓ,
+
+Cat  πθi (· | zt1 , t 1) , zit1 = m.
+
+7.3 Uniform diffusion 
+
+Uniform diffusion uses Z = Y and mixes the clean token with the uniform law 1 /V :
+
+qit|0(er | eℓ) = αt1{er = eℓ} + βt
+
+V . (74) For 0 ≤ s < t ≤ 1, 
+
+qit|s(er | eℓ) = αt
+
+αs
+
+1{er = eℓ} +
+
+
+
+1 − αt
+
+αs
+
+ 1
+
+V . (75) The continuous-time limit gives, for r̸ = ℓ,
+
+Rt(er, e ℓ) = λt
+
+V , (76) and Rt(er, e r) = −λt(V − 1) /V . Thus the process proposes uniform replacements at a rate λt.52 CTMC ELBO For a current token zit and a proposed earlier token eℓ̸ = zit, the true reverse rate is 
+
+ai(t, z 0, z t, e ℓ) = λt
+
+Vαt1{eℓ = zi
+
+> 0
+
+} + βt/V αt1{zit = zi
+
+> 0
+
+} + βt/V . (77) The induced noisy marginal is 
+
+mθi (eℓ | zt, t ) = αtμθi (eℓ | z−it , t ) + βt
+
+V ,
+
+so the cavity model rate for the zit → eℓ jump is 
+
+aθi, cavity (t, z t, e ℓ) = λt
+
+Vαtμθi (eℓ | z−it , t ) + βt/V αtμθi (zit | z−it , t ) + βt/V , eℓ̸ = zit. (78) If instead the network output is interpreted as a denoiser clean-token law πθi (· | zt, t ), the denoiser rate is 
+
+aθi, denoiser (t, z t, e ℓ) = λt
+
+V
+
+X
+
+> r
+
+πθi (er | zt, t ) αt1{eℓ = er} + βt/V αt1{zit = er} + βt/V , eℓ̸ = zit. (79) For the cavity coordinate, the true and model noisy marginals in Proposition 5 become 
+
+di(eℓ) = qt|0(eℓ | zi
+
+> 0
+
+) = βt
+
+V + αt1{eℓ = zi
+
+> 0
+
+},mi(eℓ) = βt
+
+V + αtμθi (eℓ | z−it , t ).
+
+For the current token zit, Proposition 5 applies with γi(t, e ℓ) = λt/V :
+
+J UDM ,cavity  
+
+> i,t
+
+= λt
+
+αt1{zit = zi
+
+> 0
+
+} + βt
+
+> V
+
+ X
+
+> eℓ∈Y
+
+
+
+αt1{eℓ = zi
+
+> 0
+
+} + βt
+
+> V
+
+
+
+log αt1{eℓ = zi
+
+> 0
+
+} + βt
+
+> V
+
+αtμθi (eℓ | z−it , t ) + βt
+
+> V
+
++ αt1{zit = zi
+
+> 0
+
+} + βt
+
+> V
+
+αtμθi (zit | z−it , t ) + βt
+
+> V
+
+− log αt1{zit = zi
+
+> 0
+
+} + βt
+
+> V
+
+αtμθi (zit | z−it , t ) + βt
+
+> V
+
+− 1
+
+ (80) Unlike masked diffusion, every observed token may be a corrupted version of any clean token, so every position can contribute to the loss. For the denoiser form, define 
+
+g⋆ℓ := αt1{eℓ = zi
+
+> 0
+
+} + βt/V αt1{zit = zi
+
+> 0
+
+} + βt/V , gθℓ := X
+
+> r
+
+πθi (er | zt, t ) αt1{eℓ = er} + βt/V αt1{zit = er} + βt/V .
+
+Then 
+
+J UDM ,denoiser  
+
+> i,t
+
+= λt
+
+V
+
+X 
+
+> eℓ̸=zit
+
+Φ( g⋆ℓ , g θℓ ). (81) 53 Prior KL term The fixed prior is the fully random token law, which is also the stationary law of the uniform diffusion kernel and thus coincides with the uniform forward law, 
+
+pnatural  
+
+> t2
+
+(eℓ) = punif-fwd  
+
+> t2
+
+(eℓ) = 1
+
+V , ℓ = 1 , . . . , V. 
+
+Using (74), the per-token prior KL is KL unif natural (t2) = KL unif unif-fwd (t2) = 
+
+
+
+αt2 + βt2
+
+V
+
+
+
+log ( V α t2 + βt2 ) + (V − 1) βt2
+
+V log βt2 . (82) As t2 ↑ 1, KL unif natural (t2) → 0. 
+
+Sampling For a step from t = τj to s = τj−1, evaluate the network at ( zt, t ); unlike masked diffusion, every position may be resampled. The per-position law is the cavity law (56) with the uniform kernel (75), 
+
+pθ(Zis = eℓ | zt) = qt|s(zit | eℓ) αs μθi (eℓ | z−it , t ) + βs/V αt μθi (zit | z−it , t ) + βt/V , (83) the denominator being the noisy marginal mθi (zit | zt, t ); a denoiser head enters the same step after the local Bayes conversion μθi ∝ πθi /w ℓ (58). At the final level t1, decode each position from its clean-token posterior: ˆzi 
+
+> 0
+
+∼ Cat 
+
+
+
+πθi (· | zt1 , t 1)
+
+
+
+.
+
+In contrast to the uniform cavity calibration (Proposition 4), the same uninformative head used as a denoiser makes the ELBO diverge. 
+
+Proposition 6 (Uninformative denoiser ELBO diverges for uniform diffusion) . For uniform diffu-sion (with α0 = 1 ), the uninformative denoiser head πθi ≡ 1/V has, as t ↓ 0,
+
+Eqt|0
+
+h
+
+J UDM ,denoiser 
+
+> i,t
+
+i
+
+= V − 1
+
+V
+
+−α′
+
+> t
+
+βt
+
+(1 + o(1)) ,
+
+which is non-integrable at t = 0 , so that, if V ≥ 2, the NELBO diverges as t1 ↓ 0 like 
+
+NELBO [t1,t 2](θ) = (V − 1) LV log 1
+
+βt1
+
++ O(1) .
+
+Proof. We fix one position with clean token zi
+
+> 0
+
+, and study the true and model reverse rates 
+
+ai(t, z 0, z t, e ℓ) and aθi (t, z t, e ℓ) using (77) and (79). On the one hand, the true rates are controlled by the ratio of forward kernels 
+
+ai(t, z 0, z t, e ℓ) = λt
+
+Vαt1{eℓ = zi
+
+> 0
+
+} + βt/V αt1{zit = zi
+
+> 0
+
+} + βt/V = λt
+
+V
+
+ 
+
+> βt/V αt+βt/V
+
+= O(βt) → 0, eℓ̸ = zi 
+
+> 0
+
+= zit, 
+
+> αt+βt/V βt/V
+
+= V α t 
+
+> βt
+
++ 1 , eℓ = zi
+
+> 0
+
+̸ = zit,
+
+1, otherwise. 54 As αt → 1 and βt → 0, if the current token is “correct” zit = zi
+
+> 0
+
+, then all jumps away from it decay like βt. If the current token is “wrong” zit̸ = zi
+
+> 0
+
+, then the dominant jump is the one that corrects the wrong state by jumping to the actual clean token eℓ = zi
+
+> 0
+
+, whose rate diverges like 
+
+ai(t, z 0, z t, z i
+
+> 0
+
+) = λt
+
+V
+
+ V α t
+
+βt
+
++ 1 
+
+
+
+= −α′
+
+> t
+
+βt
+
+ 1 + o(1) ,
+
+using λtαt = −α′
+
+> t
+
+. On the other hand, the model rate for πθi ≡ 1/V is, up to the same factor λt/V ,the average 1
+
+V
+
+X
+
+> r
+
+αt1{eℓ = er} + βt/V αt1{zit = er} + βt/V .
+
+By the same case-analysis with er in place of zi 
+
+> 0
+
+and since eℓ̸ = zit (we can’t have self-jumps to the current token), we always have exactly one r such that eℓ = er̸ = zit, giving a divergent term αt/β t,while all the others remain bounded. This means that for every eℓ, an uninformative denoiser rate always contains a divergent term, and thus 
+
+aθi, denoiser (t, z t, e ℓ) = λt
+
+V
+
+ αt
+
+βt
+
++ O(1) 
+
+
+
+= −α′
+
+> t
+
+V β t
+
++ O(−α′
+
+> t
+
+).
+
+We now conclude by considering first the J terms where zit = zi
+
+> 0
+
+. On those, the true-to-model rate ratio is ai/a θi = [ βt/(V α t + βt)] /[αt/β t + O(1)] = O(β2 
+
+> t
+
+), and thus Φ( ai, a θi ) = 
+
+aθi
+
+ 1 + O β2 
+
+> t
+
+| log βt| . Together with the model-rate expansion above, this shows that each of the 
+
+V − 1 destinations contributes its model rate up to an O(−α′
+
+> t
+
+) remainder. Since q(zit = zi 
+
+> 0
+
+| zi
+
+> 0
+
+) = 1 − (V − 1) βt/V = 1 + O(βt), we get 
+
+Eqt|0
+
+h
+
+J UDM ,denoiser  
+
+> i,t
+
+1{zit = zi
+
+> 0
+
+}
+
+i
+
+= ( V − 1) −α′
+
+> t
+
+V β t
+
++ O(−α′
+
+> t
+
+).
+
+It remains to check the complementary event where zit̸ = zi
+
+> 0
+
+. The rate estimates above give 
+
+ai = O
+
+ −α′
+
+> t
+
+βt
+
+
+
+, aθi = Θ 
+
+ −α′
+
+> t
+
+βt
+
+
+
+=⇒ Φ( ai, a θi ) = aθi
+
+
+
+1 − ai
+
+aθi
+
++ ai
+
+aθi
+
+log ai
+
+aθi
+
+
+
+= O
+
+ −α′
+
+> t
+
+βt
+
+
+
+.
+
+Thus its V − 1 terms are each of order O(−α′
+
+> t
+
+/β t), while the event itself has probability q(zit̸ = zi 
+
+> 0
+
+|
+
+zi
+
+> 0
+
+) = ( V − 1) βt/V = O(βt). Consequently, 
+
+Eqt|0
+
+h
+
+J UDM ,denoiser  
+
+> i,t
+
+1{zit̸ = zi
+
+> 0
+
+}
+
+i
+
+= O(−α′
+
+> t
+
+),
+
+so the event probability cancels the rate singularity. Putting the two contributions together gives 
+
+Eqt|0
+
+h
+
+J UDM ,denoiser 
+
+> i,t
+
+i
+
+= V − 1
+
+V
+
+−α′
+
+> t
+
+βt
+
++ O(−α′
+
+> t
+
+) = V − 1
+
+V
+
+−α′
+
+> t
+
+βt
+
+(1 + o(1)) .
+
+Integrating with −α′ 
+
+> t
+
+dt = d βt gives the per-position path term V −1 
+
+> V
+
+log(1 /β t1 ) + O(1). Summing over L positions gives the factor L.The downfall of the uninformative denoiser is that its jump support allows “wrong” jumps from clean tokens even near t = 0 and those kernel ratios diverge like 1 /β t. In contrast, the cavity law probabilities receive a matching O(βt) term from the Bayes factor to downweight those wrong jumps near the clean endpoint, thus keeping the cavity ELBO finite (illustrated in Figure 7). 55 7.4 Generalized interpolating discrete diffusion 
+
+Generalized Interpolating Discrete Diffusion (GIDD) [vRFD +25] additionally chooses a differen-tiable mixing distribution πt on Z (a row vector). Its single-position marginal is 
+
+qit|0(y | eℓ) = αt1{y = eℓ} + βtπt(y), qit|0 = αtI + βt1πt. (84) For 0 ≤ s < t ≤ 1 with αs > 0, define qit|s by 
+
+qit|0 = qis|0 qit|s.
+
+Solving this identity within the same rank-one family gives 
+
+qit|s = αt|sI + βt|s1πt|s, αt|s := αt
+
+αs
+
+, βt|sπt|s := βtπt − αt
+
+αs
+
+βsπs. (85) Direct multiplication verifies the Chapman–Kolmogorov equations. Expanding at t = s + ∆ gives the destination-rate vector and off-diagonal generator 
+
+ht(y) := βtπ′
+
+> t
+
+(y) + λtπt(y), Rt(x, y ) = ht(y), y̸ = x. (86) The diagonal enforces zero row sums. Since P 
+
+> y
+
+ht(y) = λt, this agrees with the expansion of (85). Valid schedules require ht(y) ≥ 0 for every off-diagonal destination. Consistent with the standing interior assumptions, we additionally take the supports of πt and ht to be fixed on (0 , 1); strictly positive entries are then bounded away from zero on compact interior windows. 
+
+CTMC ELBO For GIDD, the true and cavity reverse rates take the form 
+
+ai(t, z 0, z t, y ) = ht(zit) qt|0(y | zi
+
+> 0
+
+)
+
+qt|0(zit | zi
+
+> 0
+
+) , y̸ = zit, (87) and 
+
+aθi, cavity (t, z t, y ) = ht(zit) mθi (y | zt, t )
+
+mθi (zit | zt, t ) , (88) with noisy marginals 
+
+mθi (y | zt, t ) ≡ mi(y) = αt
+
+X
+
+> ℓ
+
+μθi (eℓ | z−it , t )1{y = eℓ} + βtπt(y).
+
+If πθi (· | zt, t ) is a denoiser clean-token law, then for y ∈ Z \ { zit},
+
+aθi, denoiser (t, z t, y ) = ht(zit) X
+
+> ℓ
+
+πθi (eℓ | zt, t ) αt1{y = eℓ} + βtπt(y)
+
+αt1{zit = eℓ} + βtπt(zit) . (89) The true noisy marginal in Proposition 5 is 
+
+di(y) = qt|0(y | zi
+
+> 0
+
+) = αt1{y = zi
+
+> 0
+
+} + βtπt(y).
+
+56 Since (86) has destination-dependent rate γi(t, y ) = ht(y), the cavity-coordinate per-position NELBO is 
+
+J GIDD ,cavity  
+
+> i,t
+
+= ht(zit)
+
+di(zit)
+
+KL( di ∥ mi) + DIS 
+
+ di(zit) mi(zit) . (90) For the denoiser-coordinate form, define, for y̸ = zit,
+
+g⋆i (y) := di(y)
+
+di(zit) = αt1{y = zi
+
+> 0
+
+} + βtπt(y)
+
+αt1{zit = zi
+
+> 0
+
+} + βtπt(zit)and 
+
+gθi (y) := X
+
+> ℓ
+
+πθi (eℓ | zt, t ) αt1{y = eℓ} + βtπt(y)
+
+αt1{zit = eℓ} + βtπt(zit) .
+
+Then 
+
+J GIDD ,denoiser  
+
+> i,t
+
+= ht(zit) X 
+
+> y̸=zit
+
+Φ
+
+
+
+g⋆i (y), g θi (y)
+
+
+
+. (91) 
+
+Prior KL term The natural fixed prior for GIDD at the upper endpoint is the interpolating distribution 
+
+pnatural  
+
+> t2
+
+= πt2 .
+
+For a clean token zi 
+
+> 0
+
+and an arbitrary position i (by symmetry, all positions are equivalent), (84) gives the endpoint law. If πt2 (zi
+
+> 0
+
+) > 0, the per-token prior KL is KL GIDD natural (t2; zi
+
+> 0
+
+) =  αt2 + βt2 πt2 (zi
+
+> 0
+
+) log αt2 + βt2 πt2 (zi
+
+> 0
+
+)
+
+πt2 (zi
+
+> 0
+
+) + βt2 (1 − πt2 (zi
+
+> 0
+
+)) log βt2 . (92) If πt2 (zi
+
+> 0
+
+) = 0 while αt2 > 0, this KL is + ∞ by support mismatch. The uniform-forwarded prior 
+
+punif-fwd  
+
+> t2
+
+(y) = αt2 
+
+> V
+
+1{y ∈ Y} + βt2 πt2 (y) (a uniform clean token pushed through qt2|0) instead gives, since the noise floor βt2 πt2 cancels off the clean vocabulary, a per-token KL KL GIDD unif-fwd (t2; zi
+
+> 0
+
+) = X
+
+> y∈Y
+
+ αt2 1{y = zi
+
+> 0
+
+} + βt2 πt2 (y) log αt2 1{y = zi
+
+> 0
+
+} + βt2 πt2 (y)
+
+αt2 /V + βt2 πt2 (y) , (93) finite whenever αt2 > 0. The masked ( αt2 log V ) and uniform ( πt stationary, so KL unif-fwd =KL natural ) cases are recovered by πt = δm and πt uniform. 
+
+Remark 4 (GIDD uninformative denoiser ELBO) . The divergence of Proposition 6 is not special to uniform diffusion. Fix a clean token x with πt(x) > 0 near t = 0 and consider the revealed event 
+
+zit = zi 
+
+> 0
+
+= x, whose probability tends to one. For any clean destination y̸ = x, the eℓ = y term of an uninformative denoiser head gives 
+
+gθi (y) ≥ 1
+
+Vαt + βtπt(y)
+
+βtπt(x) , g⋆i (y) = βtπt(y)
+
+αt + βtπt(x) = O(βt).
+
+Hence Φ( g⋆i (y), g θi (y)) = gθi (y)(1 + o(1)), exactly the g⋆ℓ = O(βt) versus gθℓ = Θ(1 /β t) mechanism used in the proof of Proposition 6. This one destination already contributes at order ht(x)/(βtπt(x)), which has the exact primitive 
+
+ht(x)
+
+βtπt(x) = π′
+
+> t
+
+(x)
+
+πt(x) + λt
+
+βt
+
+= ddt log βtπt(x)
+
+αt
+
+.
+
+57 Since βtπt(x)/α t → 0, its integral diverges as the lower endpoint tends to zero; for uniform πt,this is the same endpoint logarithm computed explicitly in Proposition 6. Thus any clean token to which πt assigns positive mass (and which occurs with positive data probability) produces the divergence, including uniform and full-support hybrids. 
+
+Corollary 5 (Coordinate conversions for the interpolating family) . For qit|0(y | eℓ) = αt1{y =
+
+eℓ} + βtπt(y) the matrix qit|0 (rows as distributions) is invertible on the clean vocabulary, and the score-to-cavity map is given by the affine transformation 
+
+μθi (eℓ) = mθi (eℓ) − βt πt(eℓ)
+
+αt
+
+, mθi (y) = sθi (zit, y )
+
+P 
+
+> y′
+
+sθi (zit, y ′) , (94) 
+
+a probability vector iff mθi (eℓ) ≥ βtπt(eℓ) for every ℓ. All conversions are then explicit (Table 4). Proof. The noise floor βtπt(y) is source-independent, so mθi (eℓ) = P 
+
+> r
+
+μθi (er)qit|0(eℓ | er) = αtμθi (eℓ)+ 
+
+βtπt(eℓ) decouples across ℓ; solving for μθi (eℓ) gives (94), with the noisy marginal recovered from a score as in Proposition 3. The matrix qit|0 = αtI + βt1πt has full row rank for αt > 0. Uniform diffusion gives μθi (eℓ) = ( mθi (eℓ) − βt/V )/α t, and masked diffusion gives μθi (eℓ) = 
+
+mθi (eℓ)/α t = ( βt/α t) sθi (m, e ℓ), recovering RADD [ONX +25]. This is the discrete analogue of empirical-Bayes deconvolution: the prior (cavity) is recovered by inverting the noising channel. from \ to denoiser πθi (eℓ) cavity μθi (eℓ) score sθi (zit, y )denoiser πθi — ∝ πθi (eℓ)/w ℓ mθi (y)/m θi (zit)cavity μθi ∝ μθi (eℓ) wℓ — mθi (y)/m θi (zit)score sθi ∝ μθi (eℓ) wℓ (via s → μ) mθi (eℓ) − βtπt(eℓ)
+
+αt
+
+—Table 4: Conversions for the interpolating family (Corollary 5), with current state zit, local like-lihood wℓ = αt1{eℓ = zit} + βtπt(zit), and cavity-induced marginal mθi (y) = αtμθi (y) + βtπt(y)(taken ∝ sθi (zit, y ) when starting from a score). Specializations: masked (πt = δm) gives 
+
+μθi (eℓ) = ( βt/α t) sθi (m, e ℓ) (RADD); uniform gives μθi (eℓ) = ( mθi (eℓ) − βt/V )/α t.Table 5 collects the three processes as instances of the common form of §6: each is fixed by a single-token generator, and the recipe of §4.3 then determines its reverse rate, NELBO integrand, and boundary terms. 58 Masked Uniform GIDD 
+
+Forward rate Rt(ey, m) = λt Rt(ey, e x) = λt
+
+V Rt(x, y ) = ht(y)Reverse rate ( bQθt )i(zt, y )
+
+− α′
+
+> t
+
+βt
+
+1{zit = m}μθi (yi) λt
+
+V    
+
+> αtμθi(yi)+ βt/V αtμθi(zit)+ βt/V
+
+ht(zit) αtμθi (yi)+ βtπt(yi)   
+
+> αtμθi(zit)+ βtπt(zit)
+
+Sampling 
+
+pθ(zis | zt)
+
+
+
+αs − αt
+
+βt
+
+μθi (zis), zis ∈ Y 
+
+βs
+
+βt
+
+, zis = m
+
+qit|s(zit | zis) αs μθi (zis) + βsπs(zis)
+
+αt μθi (zit) + βtπt(zit)Cavity integrand 
+
+J cavity 
+
+> i,t
+
+α′
+
+> t
+
+βt
+
+1{zit = m} log μθi (zi
+
+> 0
+
+) ht(zit)
+
+di(zit)
+
+
+
+KL( di ∥ mi) + DIS 
+
+ di(zit) mi(zit) 
+
+Natural prior per-token KL 0 if αt2 = 0, else + ∞
+
+di(zi
+
+> 0
+
+) log di(zi
+
+> 0
+
+)
+
+πt2 (zi
+
+> 0
+
+) + βt2 (1 −πt2 (zi
+
+> 0
+
+)) log βt2
+
+Unif. fwd. per-token KL 
+
+αt2 log V = natural KL  qt2|0 punif-fwd 
+
+> t2
+
+ (93) 1/V cavity NELBO 
+
+L log V
+
+1/V denoiser NELBO 
+
+L log V (π = μ) (V −1) LV log 1
+
+> βt1
+
++ O(1) (divergent, Prop. 6) diverges if πt puts mass on data-supported clean tokens (Rmk. 4) Table 5: The three main discrete diffusion processes as instances of our framework, with di(·) = 
+
+qit|0(· | zi
+
+> 0
+
+), mi = mθi (· | zt, t ) (Proposition 5), and ht(y) = βtπ′
+
+> t
+
+(y) + λtπt(y) the GIDD off-diagonal jump rate of (86); cavity quantities suppress the context, μθi (·) = μθi (· | z−it , t ). Two terminal priors are recorded: the natural one ((71), (82), (92)) and the uniform-data-forwarded one (72). 59 uniform : read as GIDD : read as head coord den. cav. score den. cav. score denoiser 1.25(0) 2.03(1) 7.28(1) 1.25(0) 1.91(1) 3.92(1)             
+
+> cavity 2.43(0) 1.25(0) 6.45(1) 2.57(0) 1.25(0) 3.46(1)
+> score 2.63(0) 1.33(0) 1.25(0) 2.72(0) 1.31(0) 1.25(0)
+
+Table 6: Oracle per-token NELBO values ( H(q0)/L = 1 .25; mean ±std over 6 seeds, 2 .03(1) = 2.03 ± 0.01). Each entry reads the exact reverse rate held in the row coordinate as the column coordinate without the conversion of Table 2: the diagonal is the native value, but every off-diagonal is penalized unless the conversion is applied (Theorem 7, Figure 5a). 
+
+# 8 Numerical verification 
+
+Every quantity is computed on an exactly-solvable toy model, so oracle laws, entropies, and path-KLs are available in closed form. The data law pdata = q0 is a homogeneous bigram chain on 
+
+V = 8 tokens of length L = 8 (transition matrix drawn once from a fixed seed, a row-softmax of N (0 , 1) entries at temperature 0 .3), with H(q0) = 10 .00 nats, i.e. 1 .25/token. We instantiate masked, uniform, and GIDD noising with the linear schedule αt = 1 − t on the window [ t1, t 2] = [0 .02 , 0.98], GIDD interpolating masked and uniform through a mixing weight λ controlling the terminal distribution via π1 = (1 − λ)δm + λ 1 
+
+> V
+
+(λ = 12 except where swept; not to be confused with the schedule rate λt of §7). Every floor, calibration, conversion, and sampling step is oracle-exact; only Figure 1 and Figure 3 involve training, fitting a small DiT (hidden 128, 4 heads, 3 blocks; Adam at 10 −3, batch 256, 8000 steps). Generative perplexities are exact q0-NLLs of 2500 ancestral samples over 256 steps. Each plot verifies one result of the theory: the reverse-rate projection, a trained denoiser head landing on the oracle marginal rate (Figure 1); the shared information floor H(q0) across processes (Figure 2); the Oracle Distance, every model’s excess NELBO decaying to that floor (Figure 3); the coordinate dictionary and its convert-or-pay penalty (Figure 5, Table 6); the parallel-sampling factorization error, isolated at the oracle denoiser (Figure 6); and the initialization calibration, the log V cavity value and the diverging denoiser (Figure 7). 
+
+# 9 Conclusion 
+
+We have given a self-contained, rigorous account of the continuous-time discrete-diffusion ELBO, with explicit boundary terms, and used it to answer the question of the title at two levels. At the level of the objective, the NELBO is not merely a likelihood bound: it equals the data entropy plus the path KL from the oracle reverse process to the learned one (the Oracle Distance, Theorem 3); its irreducible part is the rate of information loss ddt H(Z0 | Zt), and its best achievable value is the data entropy H(pdata ), for every noising process. At the level of the learned object, a discrete diffusion model learns the marginal reverse jump rate , the posterior average of the clean-conditioned rate, and the denoiser, cavity, and score parameterizations are three coordinates of this one object (Table 3), related by exact conversions. This viewpoint turns scattered constructions into instances of one recipe, with concrete consequences: closed-form per-process ELBOs whose boundary terms make reported values comparable across noising processes ( §7, Table 5), the log V cavity calibration 60 (Proposition 4), the denoiser-coordinate divergence that explains why the denoiser head is harder to train under uniform and GIDD noising (Proposition 6), and the reason masked diffusion is special: there the denoiser and cavity laws coincide (Corollary 4), and the distinction disappears. On an exactly-solvable model, each of these identities (the shared floor, the Oracle Distance decay, the reverse-rate projection, and the convert-or-pay penalties) is confirmed numerically without approximation. Our analysis characterizes the teacher-forced objective: the reverse rate is regressed at noisy states zt ∼ qt|0 drawn from the true forward process, not at the states a model visits when sampling from its own trajectory. This is a consistent target. In the well-specified, infinite-capacity, infinite-data limit the learned rate matches the true reverse rate at every state, so rollout never leaves qt
+
+and no drift occurs. Sampling drift is therefore a finite-capacity generalization gap (the learned rate extrapolates poorly to self-generated, low-qt states) rather than a defect of the objective, a more precise statement than the usual reading of exposure bias as objective mismatch. The clean results here, namely the Bregman projection optimum, the exact distance to the oracle, and the entropy floor, all presuppose teacher-forced states; objectives or samplers that instead target self-generated states gain robustness to drift but lose these exact characterizations. Two limitations point to the natural next steps. First, our validation is on a controlled, exactly-solvable model, chosen so that every oracle quantity is available in closed form; confirming that the coordinate-conversion gains persist at model scale is the natural next step, and the concurrent uniform-diffusion results of [GJS +26] already provide such evidence at that scale for the uniform special case. Second, the reverse-rate/factorization split ( §2.2) isolates two complementary and separately addressable error sources: reverse-rate error at off-distribution states, reducible through drift-aware training or added capacity and data; and factorization error at finite step count, re-ducible through corrector or self-correcting samplers. Scaling the convert-or-pay comparison across the full denoiser/cavity/score family, and across noising processes, is a concrete program our dic-tionary makes precise. The single operational rule it leaves the practitioner is simple: learn a head in the coordinate its loss optimizes, or convert between coordinates analytically before you sample. 61 References 
+
+[AJH +21] Jacob Austin, Daniel D. Johnson, Jonathan Ho, Daniel Tarlow, and Rianne van den Berg. Structured denoising diffusion models in discrete state-spaces. In Advances in Neural Information Processing Systems , volume 34, pages 17981–17993, 2021. URL: 
+
+https://openreview.net/forum?id=h7-XixPCAL .[AW12] Rami Atar and Tsachy Weissman. Mutual information, relative entropy, and estima-tion in the Poisson channel. IEEE Transactions on Information Theory , 58(3):1302– 1318, 2012. doi:10.1109/TIT.2011.2172572 .[BGW05] Arindam Banerjee, Xin Guo, and Hui Wang. On the optimality of conditional expectation as a Bregman predictor. IEEE Transactions on Information Theory ,51(7):2664–2669, 2005. doi:10.1109/TIT.2005.850145 .[Br´ e81] Pierre Br´ emaud. Point Processes and Queues: Martingale Dynamics . Springer Series in Statistics. Springer, 1981. [BSDB +24] Joe Benton, Yuyang Shi, Valentin De Bortoli, George Deligiannidis, and Arnaud Doucet. From denoising diffusions to denoising Markov models. Journal of the Royal Statistical Society Series B: Statistical Methodology , 86(2):286–301, 2024. doi:10. 1093/jrsssb/qkae005 .[CBDB +22] Andrew Campbell, Joe Benton, Valentin De Bortoli, Thomas Rainforth, George Deli-giannidis, and Arnaud Doucet. A continuous time framework for discrete denoising models. In Advances in Neural Information Processing Systems , volume 35, 2022. URL: https://openreview.net/forum?id=DmT862YAieY .[CYB +24] Andrew Campbell, Jason Yim, Regina Barzilay, Tom Rainforth, and Tommi Jaakkola. Generative flows on discrete state-spaces: Enabling multimodal flows with applications to protein co-design. In Proceedings of the 41st International Confer-ence on Machine Learning (ICML) , volume 235 of Proceedings of Machine Learning Research , pages 5453–5512. PMLR, 2024. URL: https://openreview.net/forum? id=kQwSbv0BR4 .[GJS +26] Samson Gourevitch, Yazid Janati, Dario Shariatian, Umut Simsekli, Eric Moulines, Eric P. Xing, and Alain Durmus. Uniform diffusion models revisited: Leave-one-out denoiser and absorbing state reformulation, 2026. URL: https://arxiv.org/abs/ 2605.22765 , arXiv:2605.22765 .[Gra11] Robert M. Gray. Entropy and Information Theory . Springer, 2 edition, 2011. doi: 10.1007/978-1-4419-7970-4 .[GRS +24] Itai Gat, Tal Remez, Neta Shaul, Felix Kreuk, Ricky T. Q. Chen, Gabriel Synnaeve, Yossi Adi, and Yaron Lipman. Discrete flow matching. In Advances in Neural In-formation Processing Systems , volume 37, 2024. URL: https://openreview.net/ forum?id=GTDKo3Sv9p .62 [GSV05] Dongning Guo, Shlomo Shamai, and Sergio Verd´ u. Mutual information and minimum mean-square error in Gaussian channels. IEEE Transactions on Information Theory ,51(4):1261–1282, 2005. doi:10.1109/TIT.2005.844072 .[HHY +25] Peter Holderrieth, Marton Havasi, Jason Yim, Neta Shaul, Itai Gat, Tommi Jaakkola, Brian Karrer, Ricky T. Q. Chen, and Yaron Lipman. Generator matching: Generative modeling with arbitrary Markov processes. In International Conference on Learning Representations (ICLR) , 2025. Oral presentation. URL: https://openreview.net/ forum?id=RuP17cJtZo .[HJA20] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffusion probabilistic models. In Advances in Neural Information Processing Systems (NeurIPS) , volume 33, pages 6840–6851, 2020. URL: https://openreview.net/forum?id=St1giarCHLP .[HNJ +21] Emiel Hoogeboom, Didrik Nielsen, Priyank Jaini, Patrick Forr´ e, and Max Welling. Argmax flows and multinomial diffusion: Learning categorical distributions. In Ad-vances in Neural Information Processing Systems , volume 34, pages 12454–12465, 2021. URL: https://openreview.net/forum?id=6nbpPqUCIi7 .[JCS16] Dominik Janzing, Rafael Chaves, and Bernhard Sch¨ olkopf. Algorithmic independence of initial condition and dynamical law in thermodynamics and causal inference. New Journal of Physics , 18(9):093052, 2016. doi:10.1088/1367-2630/18/9/093052 .[JS03] Jean Jacod and Albert N. Shiryaev. Limit Theorems for Stochastic Processes , volume 288 of Grundlehren der mathematischen Wissenschaften . Springer, 2 edition, 2003. 
+
+doi:10.1007/978-3-662-05265-5 .[JSJN25] Moongyu Jeon, Sangwoo Shin, Dongjae Jeon, and Albert No. Information-theoretic discrete diffusion. In Advances in Neural Information Processing Systems (NeurIPS) ,2025. URL: https://openreview.net/forum?id=B2iPEX5A9c , arXiv:2510.24088 .[KBVS23] Xianghao Kong, Rob Brekelmans, and Greg Ver Steeg. Information-theoretic diffu-sion. In International Conference on Learning Representations (ICLR) , 2023. URL: 
+
+https://openreview.net/forum?id=UvmDCdSPDOW .[KSPH21] Diederik P. Kingma, Tim Salimans, Ben Poole, and Jonathan Ho. Variational dif-fusion models. In Advances in Neural Information Processing Systems , volume 34, pages 21696–21707, 2021. URL: https://openreview.net/forum?id=2LdBqxc1Yv .[KW14] Diederik P. Kingma and Max Welling. Auto-encoding variational Bayes. In In-ternational Conference on Learning Representations (ICLR) , 2014. URL: https: //arxiv.org/abs/1312.6114 .[LME24] Aaron Lou, Chenlin Meng, and Stefano Ermon. Discrete diffusion modeling by estimating the ratios of the data distribution. In Proceedings of the 41st In-ternational Conference on Machine Learning (ICML) , volume 235 of Proceedings of Machine Learning Research , pages 32819–32848. PMLR, 2024. URL: https: //openreview.net/forum?id=CNicRIVIPA .63 [MCSE22] Chenlin Meng, Kristy Choi, Jiaming Song, and Stefano Ermon. Concrete score match-ing: Generalized score matching for discrete data. In Advances in Neural Information Processing Systems , volume 35, 2022. URL: https://openreview.net/forum?id= _RL7wtHkPJK .[ND21] Alexander Quinn Nichol and Prafulla Dhariwal. Improved denoising diffusion prob-abilistic models. In Proceedings of the 38th International Conference on Machine Learning , volume 139 of Proceedings of Machine Learning Research , pages 8162–8171. PMLR, 2021. URL: https://proceedings.mlr.press/v139/nichol21a.html .[Nor97] J. R. Norris. Markov Chains . Cambridge Series in Statistical and Probabilistic Mathematics. Cambridge University Press, 1997. doi:10.1017/CBO9780511810633 .[NZY +25] Shen Nie, Fengqi Zhu, Zebin You, Xiaolu Zhang, Jingyang Ou, Jun Hu, Jun Zhou, Yankai Lin, Ji-Rong Wen, and Chongxuan Li. Large language diffusion models. In 
+
+Advances in Neural Information Processing Systems (NeurIPS) , 2025. Oral presenta-tion. URL: https://openreview.net/forum?id=KnqiC0znVF , arXiv:2502.09992 .[ONX +25] Jingyang Ou, Shen Nie, Kaiwen Xue, Fengqi Zhu, Jiacheng Sun, Zhenguo Li, and Chongxuan Li. Your absorbing discrete diffusion secretly models the conditional distributions of clean data. In International Conference on Learning Representations (ICLR) , 2025. URL: https://openreview.net/forum?id=sMyXP8Tanm .[PJGS09] Jonas Peters, Dominik Janzing, Arthur Gretton, and Bernhard Sch¨ olkopf. Detecting the direction of causal time series. In Proceedings of the 26th Annual International Conference on Machine Learning (ICML) , pages 801–808. ACM, 2009. doi:10.1145/ 1553374.1553477 .[PJS13] Jonas Peters, Dominik Janzing, and Bernhard Sch¨ olkopf. Causal inference on time series using restricted structural equation models. In Advances in Neural Information Processing Systems (NeurIPS) , volume 26, pages 154–162, 2013. URL: https://proceedings.neurips.cc/paper_files/paper/2013/hash/ 47d1e990583c9c67424d369f3414728e-Abstract.html .[RC04] Christian P. Robert and George Casella. Monte Carlo Statistical Methods . Springer Texts in Statistics. Springer, 2 edition, 2004. doi:10.1007/978-1-4757-4145-2 .[RMW14] Danilo Jimenez Rezende, Shakir Mohamed, and Daan Wierstra. Stochastic back-propagation and approximate inference in deep generative models. In Proceedings of the 31st International Conference on Machine Learning (ICML) , volume 32 of 
+
+Proceedings of Machine Learning Research , pages 1278–1286. PMLR, 2014. URL: 
+
+https://proceedings.mlr.press/v32/rezende14.html .[RNB +26] Gabriel Raya, Bac Nguyen, Georgios Batzolis, Yuhta Takida, Dejan Stancevic, Naoki Murata, Chieh-Hsin Lai, Yuki Mitsufuji, and Luca Ambrogioni. Noise scheduling as information-guided allocation in diffusion training, 2026. URL: https://arxiv.org/ abs/2602.18647 , arXiv:2602.18647 , doi:10.48550/arXiv.2602.18647 .64 [SAS +24] Subham Sekhar Sahoo, Marianne Arriola, Yair Schiff, Aaron Gokaslan, Edgar Marro-quin, Justin T. Chiu, Alexander Rush, and Volodymyr Kuleshov. Simple and effective masked diffusion language models. In Advances in Neural Information Processing Systems , volume 37, 2024. URL: https://openreview.net/forum?id=L4uaAR4ArM .[SDG +25] Subham Sekhar Sahoo, Justin Deschenaux, Aaron Gokaslan, Guanghan Wang, Justin T. Chiu, and Volodymyr Kuleshov. The diffusion duality. In Proceedings of the 42nd International Conference on Machine Learning (ICML) , volume 267 of 
+
+Proceedings of Machine Learning Research , pages 52584–52619. PMLR, 2025. URL: 
+
+https://openreview.net/forum?id=9P9Y8FOSOk .[SDWMG15] Jascha Sohl-Dickstein, Eric A. Weiss, Niru Maheswaranathan, and Surya Ganguli. Deep unsupervised learning using nonequilibrium thermodynamics. In Proceedings of the 32nd International Conference on Machine Learning (ICML) , volume 37 of 
+
+Proceedings of Machine Learning Research , pages 2256–2265. PMLR, 2015. URL: 
+
+https://proceedings.mlr.press/v37/sohl-dickstein15.html .[SHW +24] Jiaxin Shi, Kehang Han, Zhe Wang, Arnaud Doucet, and Michalis K. Titsias. Sim-plified and generalized masked diffusion for discrete data. In Advances in Neu-ral Information Processing Systems , volume 37, pages 103131–103167, 2024. URL: 
+
+https://openreview.net/forum?id=xcqSOfHt4g .[SJP +12] Bernhard Sch¨ olkopf, Dominik Janzing, Jonas Peters, Eleni Sgouritsa, Kun Zhang, and Joris M. Mooij. On causal and anticausal learning. In Proceedings of the 29th In-ternational Conference on Machine Learning (ICML) , pages 1255–1262. Omnipress, 2012. URL: https://icml.cc/2012/papers/625.pdf .[SLY +26] Subham Sekhar Sahoo, Jean-Marie Lemercier, Zhihan Yang, Justin Deschenaux, Jingyu Liu, John Thickstun, and Ante Jukic. Scaling beyond masked diffusion lan-guage models. In International Conference on Machine Learning (ICML) , 2026. To appear. URL: https://arxiv.org/abs/2602.15014 , arXiv:2602.15014 .[SSP +25] Yair Schiff, Subham Sekhar Sahoo, Hao Phung, Guanghan Wang, Sam Boshar, Hugo Dalla-torre, Bernardo P. de Almeida, Alexander Rush, Thomas Pierrot, and Volodymyr Kuleshov. Simple guidance mechanisms for discrete diffusion mod-els. In International Conference on Learning Representations (ICLR) , 2025. URL: 
+
+https://openreview.net/forum?id=i5MrJ6g5G1 .[ST25] Jiaxin Shi and Michalis K. Titsias. Demystifying diffusion objectives: Reweighted losses are better variational bounds, 2025. URL: https://arxiv.org/abs/2511. 19664 , arXiv:2511.19664 .[SYD +23] Haoran Sun, Lijun Yu, Bo Dai, Dale Schuurmans, and Hanjun Dai. Score-based continuous-time discrete diffusion models. In International Conference on Learn-ing Representations (ICLR) , 2023. URL: https://openreview.net/forum?id= BYWWwSY2G5s .[Vin11] Pascal Vincent. A connection between score matching and denoising autoencoders. 
+
+Neural Computation , 23(7):1661–1674, 2011. doi:10.1162/neco_a_00142 .65 [vRFD +25] Dimitri von R¨ utte, Janis Fluri, Yuhui Ding, Antonio Orvieto, Bernhard Sch¨ olkopf, and Thomas Hofmann. Generalized interpolating discrete diffusion. In Proceedings of the 42nd International Conference on Machine Learning (ICML) , volume 267 of 
+
+Proceedings of Machine Learning Research , pages 61810–61843. PMLR, 2025. URL: 
+
+https://openreview.net/forum?id=rvZv7sDPV9 .[ZYYK24] Lin Zheng, Jianbo Yuan, Lei Yu, and Lingpeng Kong. A reparameterized discrete diffusion model for text generation. In Conference on Language Modeling (COLM) ,2024. URL: https://openreview.net/forum?id=PEQFHRUFca , arXiv:2302.05737 .[ZZZ +25] Ruixiang Zhang, Shuangfei Zhai, Yizhe Zhang, James Thornton, Zijing Ou, Joshua M. Susskind, and Navdeep Jaitly. Target concrete score matching: A holistic framework for discrete diffusion. In Proceedings of the 42nd International Conference on Machine Learning (ICML) , volume 267 of Proceedings of Machine Learning Re-search , pages 76716–76753. PMLR, 2025. URL: https://openreview.net/forum? id=ZMrdvSm7xi .66

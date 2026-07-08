@@ -1,0 +1,2472 @@
+Title: Accelerating Discrete Diffusion Models with Parallel-In-Time Sampling
+
+URL Source: https://arxiv.org/pdf/2607.00773v1
+
+Published Time: Thu, 02 Jul 2026 00:53:47 GMT
+
+Number of Pages: 33
+
+Markdown Content:
+# Accelerating Discrete Diffusion Models with Parallel-In-Time Sampling 
+
+Yu Yao 
+
+The University of Tokyo 
+
+yuyao@g.ecc.u-tokyo.ac.jp 
+
+Huanjian Zhou ∗
+
+The University of Tokyo 
+
+zhou-huanjian185@g.ecc.u-tokyo.ac.jp 
+
+Andi Han 
+
+The University of Sydney 
+
+andi.han@sydney.edu.au 
+
+Wei Huang 
+
+RIKEN AIP & The Institute of Statistical Mathematics 
+
+wei.huang.vr@riken.jp 
+
+Masashi Sugiyama 
+
+RIKEN AIP & The University of Tokyo 
+
+sugi@k.u-tokyo.ac.jp 
+
+## Abstract 
+
+Discrete diffusion models are widely used for learning and generating discrete distributions. As the generation process is inherently sequential, the acceleration of sampling is of significant importance. In this work, we parallelize the mainstream 
+
+τ -leaping algorithm for absorbing discrete diffusion in a Continuous-Time Markov Chain (CTMC) framework. By leveraging the continuous-time stochastic integral form of the τ -leaping algorithm and the Picard iteration method, we achieve parallel-in-time sampling acceleration and provide a proof of exponential-factorial convergence for our algorithm. We improve the overall time complexity of τ -leaping under absorbing settings from O(d log S) to O(log( d log S) · log d) with respect to NFE. Empirically, our method shows consistent acceleration across synthetic and real-data settings. The new sampler achieves at most 7–9× runtime speedup for synthetic distribution, and maintains the same quality with 50% fewer NFE and 1.45 –1.86 × runtime speedups in image/text tasks on a single GPU. Our research expands the potential of discrete diffusion models for efficient parallel inference, with broader implications for applications such as molecular structure and language generation. 
+
+## 1 Introduction 
+
+Diffusion models over discrete spaces [ AJH +21 ] have become central to generative modeling for categorical data, with increasing impact across applications including molecular design [ VKS +22 ], protein engineering [GSF +23], DNA sequence generation under biophysical constraints [SKS +24], and high-fidelity generation of text [ ZYYK23 ], music [ YYW +23 ], and images [ LSJ +22 ]. One of the mainstream discrete diffusion is the Absorbing discrete diffusion, which progressively replaces discrete tokens with a special mask or absorbing state, then learns to reconstruct the original data by reversing this corruption process. However, the algorithms underlying the above results are highly sequential and fail to fully exploit contemporary parallel computing resources for modern GPUs. While parallel-in-time algorithms for continuous diffusion models have been extensively studied [ ACV24 , CRYR24 , SBE +23 , ZS25 ], their counterparts for discrete diffusion models remain largely unexplored. This gap motivates our investigation into the question: 
+
+> ∗Corresponding to: Huanjian Zhou Preprint.
+> arXiv:2607.00773v1 [cs.LG] 1 Jul 2026
+
+Table 1: Comparisons of our parallel and sequential methods for discrete diffusion sampling given 
+
+δ-accuracy of the score. Here, S denotes the size of vocabulary.                                                 
+
+> Method Time Complexity Space Complexity Metrics
+> τ-leaping [RCRY25, Theorem 4.7] O(d2log 2(d/δ 2)
+> δ2)O(d)KL-divergence
+> τ-leaping [CDPR25, Theorem 3.1.3] O(dS δ2)O(d)Total Variation
+> τ-leaping [LHL +25, Theorem 2] O(dS δ)O(d)KL-divergence
+> τ-bridging [DHW26, Theorem 2] O(D(q0)
+> δ)≤ O (dlog Sδ)O(d)KL-divergence First-Hitting Sampler [LTSL26, Theorem 4] Exact dO(d)KL-divergence Picard τ-leaping [Ours, Theorem 4.2] O
+> 
+> log dlog Sδ2·log dδ
+> eO(d2S)Total Variation
+
+Whether parallelization can fundamentally accelerate sampling for discrete diffusion models ?
+
+1.1 Our contributions 
+
+In this paper, we make significant progress in both theoretical and practical sides. The key contribu-tions of this work are summarized as follows: • We introduce the first parallel-in-time algorithm for τ -leaping methods [ CBDB +22 , Gil01 ] for absorbing discrete diffusion inference, namely the Picard τ -leaping method (Algorithm 1). • We provide well-established theoretical analysis of the method, proving O(log( d log S) · log d)
+
+time complexity with respect to NFE compared with O(d log S) complexity of mainstream sequential methods with extra eO(dS ) space complexity 2 cost (Theorem 4.2). We summarize the comparison between existing methods and our results in Table 1. • We verify our method on both synthetic and real-world tasks and achieve substantial improve-ments in sampling efficiency over various sequential and acceleration methods (Section 5). 
+
+1.2 Technical Overview: From Coordinate Parallelism to Time Parallelism 
+
+Sampling algorithms for absorbing discrete diffusion can be broadly divided into Approximate Time-Discretization Methods and Exact Simulation Methods . The typical approximate sampler, τ -leaping sampler, freezes the reverse rates over short time intervals and applies multiple coordinate-level jumps in parallel within each step. A general stochastic-integral framework for discrete diffusion was developed by [ RCRY25 ], who represent discrete diffusion through Poisson random measures with evolving intensity but its generic τ -leaping bounds are conservative for absorbing processes. Many recent work focuses specifically on the absorbing dynamics. [ HLJ +25 ] study the complexity of masked discrete diffusion and propose Mask-Aware Truncated Uniformization (MATU), which leverages the fact that masked tokens cannot be unmasked multiple times and adapts the truncation of outgoing rates to the number of remaining masked coordinates. [ LHL +25 ] gives the first rigorous convergence guarantees for absorbing τ -leaping under bounded score estimates. [ CDPR25 ] provide sharper non-asymptotic bounds for masked and random-walk discrete diffusion, using the evolution and monotonicity of discrete scores to avoid strong boundedness assumptions. [ DHW26 ] analyze discrete diffusion through information-theoretic quantities, proving sharp upper bound that intrin-sically depends on the structural properties of the target distribution. More specifically, sampling highly structural distribution with sparse dependency graph may allow more parallel-in-token unmask operations at each time step, which leads to lower time complexity. Together, these results highlight that masking diffusion has exploitable structure beyond generic finite-state CTMCs, and show that sequential masking samplers can achieve at most linear complexity up to logarithmic factors. Compared with previous sequential methods and analysis, our method keeps the same fine grid but approximate the sequential chain through parallelism along the time horizon. We group many fine intervals into a larger block and solve the whole block transition by Picard iteration. In each 
+
+> 2We note, in this paper, that the space complexity refers to the state-level space after each iteration based the number of words [CAWZ23] instead of the number of bits [Gol08] to denote the approximate required storage.
+
+2Picard round, all microsteps in the block are evaluated in parallel from the previous round’s trajectory using the same block randomness generated at the beginning of the algorithm. Compared to the Picard methods for continuous diffusion models [ CRYR24 , SBE +23 , ZS25 ], we additionally apply a first-hitting truncation inside the block for masking diffusion, preserving the absorbing structure while making the block update compatible with parallel prefix operations. By proving an exponential-factorial contraction of the Picard error, we derive O(log d) level estimation for both number of blocks and Picard iterations, which eventually leads to poly log( d) time complexity. 
+
+1.3 Other Related Work Exact simulation of reverse process with learned score. Exact simulation methods, such as uni-formization for uniform-rate chains [ CY24 ] and the First-Hitting Sampler (FHS) [ LTSL26 , ZCM +24 ]for absorbing chains, simulate the reverse CTMC by separating the sampling of jump times from the sampling of jump destinations. This removes time-discretization error and, in the absorbing case, can directly exploit the fact that each coordinate is unmasked at most once. In the ideal exact-score setting, such methods provide unbiased simulation of the learned reverse with d steps sampling [ LTSL26 ]. However, exact simulation does not necessarily lead to better generation quality in practice. Recent empirical results even show that exact simulation can underperform approximate solvers despite having no discretization error [ RCZ +25 ]. One possible reason is that exact samplers concentrate many jumps near the terminal phase of the reverse process, precisely where score estimation is most singular and inaccurate. This motivates continued study of approximate samplers, especially the τ -leaping method, whose discretization can act as a stabilizing numerical approximation of learned-score errors. 
+
+Other acceleration strategies A large body of empirical work accelerates discrete diffusion by changing the decoding strategy rather than the time integration scheme. Parallel decoding methods unmask multiple tokens per iteration using confidence, entropy, margin, or related criteria, thereby ex-ploiting spatial or token-level parallelism [ CZJ +22 , RAR26 , XXF +25 , WZX +25 , YMW25 ]. These methods are effective in practice, but the sampling horizon still consists of a sequence of denoising rounds. Other approaches modify the generation order or introduce auxiliary planning modules. DDPD [ LNC +24 ] separates generation into a planner and a denoiser, allowing the model to decide which corrupted positions should be refined next; related path-planning methods study how the unmasking order affects sample quality [ PBP +25 ]. High-order solvers [ RCZ +25 ] extend ideas such as trapezoidal integration to jump processes, reducing discretization error and permitting larger steps under the same computation budget . 
+
+## 2 Preliminaries on Discrete Diffusion Models 
+
+In this section, we briefly introduce the background knowledge about the mathematical framework of discrete diffusion and its properties under mask settings. Throughout the sampling and theoretical analysis, t denotes the forward noising time where t = 0 is the clean-data endpoint, and the early-stopped reverse sampler runs from T down to η > 0.
+
+2.1 Continuous-Time Markov Chains and Poisson Integrals 
+
+In discrete diffusion models, the forward process is a continuous-time Markov chain (CTMC) 
+
+(xt)t∈[0 ,T ] on a finite state space X . Let pt ∈ ∆|X | denote the law of xt as a column vector. The forward equation is dpt 
+
+> dt
+
+= Qt pt, Qt =  Qt(y, x ) 
+
+> x,y ∈X
+
+, where Qt is a rate matrix with (i) 
+
+Qt(x, y ) ≥ 0 for x̸ = y and (ii) Qt(x, x ) = − P  
+
+> y̸=x
+
+Qt(y, x ). We write eQt := Qt − diag( Qt)
+
+for the off-diagonal part. The time-reversed (backward) process  ⃗ xt
+
+ 
+
+> t∈[0 ,T ]
+
+, with ⃗ ∗t := ∗T −t, is again a CTMC with law ⃗ ps and generator ⃗ Qt satisfying [ Kel11 ] d⃗ pt 
+
+> dt
+
+=⃗ Qt⃗ pt, where for x̸ = y,⃗
+
+Qt(y, x ) = ⃗ pt(y)⃗ 
+
+> pt(x)⃗
+
+Qt(x, y ), and ⃗ Qt(x, x ) = − P  
+
+> y′̸=x⃗
+
+Qt(y′, x ), and ⃗ Qt := QT −t.According to Proposition 3.2 in [ RCRY25 ], discrete diffusion models can also be interpreted as stochastic integrals with Poisson random measure. The forward process in discrete diffusion models can thus be represented by the following stochastic integral: xt = x0 + R t
+
+> 0
+
+R 
+
+> D
+
+νN [λ](d t, dν), where 3the intensity λ is defined as λt(ν, ω ) = ⃗ Qt(xt− (ω) + ν, x t− (ω)) if xt− (ω) + ν ∈ X and 0 otherwise. Here, the outcome ω ∈ Ω and xt− denotes the left limit of the càdlàg process xt at time t with 
+
+x0− = x0. We will also omit the variable ω, should it be clear from context. The backward process in discrete diffusion models can also be represented similarly as 
+
+yt = y0 +
+
+Z t
+
+> 0
+
+Z
+
+> D
+
+νN [μ](d s, dν), (1) where the intensity μ is defined as μt(ν, ω ) = ⃗ st(yt− , yt− + ν)⃗ Qs(ys− , ys− + ν). During inference, 
+
+bμ defined by replacing the true score st with the neural network estimated score bst is used. 
+
+2.2 Masking Diffusion 
+
+In this work, we focus on absorbing, or masking discrete diffusion on the clean state space X0 = [ S]d
+
+and the masked state space XM = ([ S] ∪ { MASK })d. The forward process independently replaces each clean coordinate by MASK and keeps MASK absorbing. Let βt ≥ 0 be the forward masking rate (i.e. noise schedule) and αt := exp 
+
+
+
+− R t 
+
+> 0
+
+βs ds 
+
+
+
+. Then, for a clean sample x0 ∈ [S]d, the forward marginal is qt(z | x0) = Qdi=1 
+
+h
+
+αt 1{zi = x0,i } + (1 − αt) 1{zi = MASK }
+
+i
+
+, z ∈ X M .
+
+Equivalently, the forward CTMC generator only allows transitions from ordinary tokens to MASK :
+
+Qt(z, z i→MASK ) = βt 1{zi̸ = MASK }, Qt(z, z ) = −βt |{ i : zi̸ = MASK }| .
+
+Here zi→MASK denotes the state obtained by replacing coordinate i of z with MASK .The reverse process has a particularly simple structure. Let O(z) := {i : zi̸ = MASK } be the observed coordinates of a partially masked state z. For a masked coordinate i / ∈ O(z), define the clean-data posterior πi(c | z) := PX0∼pdata 
+
+ X0,i = c X0,O (z) = zO(z)
+
+ , c ∈ [S]. Because the masking channel treats all hidden token values identically, this posterior is independent of the corruption time t. The reverse rate from z to the state zi←c, obtained by replacing MASK at coordinate i with token c, is 
+
+μt(zi←c, z ) = βt
+
+qt(zi←c)
+
+qt(z) = βtαt
+
+1 − αt
+
+πi(c | z) = at πi(c | z), at := βtαt
+
+1 − αt
+
+.
+
+Thus the reverse rate separates into a scalar time factor at and a time-independent conditional token posterior. A learned score model is used to approximate this posterior, giving rates of the form 
+
+bμt(zi←c, z ) = at bpθi (c | z) and P 
+
+> c∈[S]
+
+bpθi (c | z) = 1 . Finally, masking diffusion has a first-hitting structure. Along reverse sampling, a coordinate remains masked until its first reveal time τi ∈ [η, T ],and then stays fixed as Xi(t) = MASK for t > τ i and Xi(t) = ci for t ≤ τi. This absorbing first-hitting property distinguishes masking diffusion from uniform or random-walk discrete diffusion, where coordinates may jump repeatedly, and is the structural property exploited by our Picard sampler. 
+
+## 3 Parallel Sampling for Absorbing Discrete Diffusion Models: Algorithm 1 
+
+In this section, we introduce the parallel-in-time τ -leaping algorithm for absorbing discrete diffusion models. The key idea is to extend the Picard iteration from continuous diffusion models to the stochastic integral form of τ -leaping in discrete state spaces. 
+
+Discretization Scheme. Following the time convention above, the reverse sampler is executed on the forward-noise interval [η, T ] in decreasing time order. We use a large noise-time grid T =
+
+t0 > t 1 > · · · > t N = η. For block n, the interval [tn+1 , t n] is divided into M fine cells using 
+
+τn,m = tn − mϵ n, ϵn = tn−tn+1  
+
+> M
+
+, m = 0 , . . . , M . The positive number ϵn is the fine-step width used in the Poisson proposal mean, and can be set as ϵn = ϵ under constant width schedule. 
+
+Picard update. When describing the standard τ -leaping algorithm with the form in equation 1, the main update step in Picard iteration can be described as 
+
+by(k+1)  
+
+> τn,m
+
+= bytn + Xm−1
+
+> j=0
+
+ X
+
+> y′∈X
+
+ y′ − by(k)
+
+> τn,j
+
+ · P  bμθτn,j 
+
+ y′ | by(k) 
+
+> τn,j
+
+; ξn
+
+ · ϵn
+
+
+
+. (2) 4Algorithm 1 Parallel τ -Leaping Algorithm for Discrete Diffusion Model Sampling 
+
+Input: byt0 ∼ qT , large time grid (tn)n∈[0 ,N ] with t0 = T , tN = η, and tn+1 < t n; small time grid 
+
+(τn,m )n∈[0 ,N −1] ,m ∈[0 ,M ] with τn, 0 = tn, τn,M = tn+1 and positive step size ϵ = tn − tn+1 
+
+divided by M , i.e. τn,m = tn − mϵ ; Picard depth Kp; intensity bμθs ; pre-sampled random seeds 
+
+(ξn)n∈[0 ,N −1] ; First-hitting truncation operation FHT( ·) .
+
+Output: An early-stopped sample bytN with tN = η. 
+
+> 1:
+
+for n = 0 to N − 1 do  
+
+> 2:
+
+Initial Guess: by(0)  
+
+> τn,m
+
+← bytn for all m ∈ [0 , M ] 
+
+> 3:
+
+for k = 0 to Kp − 1 do  
+
+> 4:
+
+for j = 0 to M − 1 in parallel do  
+
+> 5:
+
+bμθj ← bμθτn,j 
+
+  · | by(k)
+
+> τn,j
+
+ 
+
+> 6:
+
+Jj,y ′ ∼ P (bμθj (y′) · ϵ; ξn) for all y′ ∈ X neighbor  
+
+> 7:
+
+∆by(k) 
+
+> j
+
+= P
+
+> y′∈X neighbor
+
+ y′ − by(k)
+
+> τn,j
+
+ · Jj,y ′ 
+
+> 8:
+
+First-Hitting Truncation: (∆ by(k)0 , . . . , ∆by(k) 
+
+> M−1
+
+) ← FHT 
+
+
+
+∆by(k)0 , . . . , ∆by(k) 
+
+> M−1
+
+ 
+
+> 9:
+
+for m = 1 to M in parallel do  
+
+> 10:
+
+by(k+1)  
+
+> τn,m
+
+← bytn + Pm−1 
+
+> j=0
+
+∆by(k) 
+
+> j
+> 11:
+
+bytn+1 ← by(Kp)
+
+> τn,M
+
+where by(k) 
+
+> τn,j
+
+is the sample state a t = tn − jϵ in the k-th Picard iteration. P(bμθτn,j (y′|by(k) 
+
+> τn,j
+
+; ξn)
+
+denotes the number of jumps from by(k) 
+
+> τn,j
+
+to y′ during the small time interval ϵ. In the block-wise parallel algorithm, the computation for each block starts from its initial state bytn which is also the terminal value of the last block. Check Lines 4–7 in Algorithm 1 for details. The sampler admits a coordinate-token factorization [ CBDB +22 ]: each fine cell proposes token updates over d coordinates and S vocabulary entries, giving O(dS ) local proposal cost rather than Sd dependence. The Picard update then replaces the serial dependence on the previous fine step by dependence on the full trajectory from the previous iteration, and all proposals inside a block can be computed in parallel. After applying first-hitting truncation, the next block trajectory is reconstructed from the block start state using a parallel prefix sum over the truncated jump vectors. With pre-sampled shared random seeds ξn, the Poisson sampling performs as a deterministic map for convergence in each block. Since multi-time jump at the same time on one coordinate is not well-defined, such case is also truncated [LLLS25]. 
+
+First-hitting truncation. First-hitting truncation is designed for absorbing settings in Algorithm 2 (check Appendix E for details). Given the local proposal events in a block prefix before the trajectory reconstruction, the first-hitting operation returns the state obtained by applying, for each coordinate, only its earliest proposed token. 
+
+## 4 Theoretical Guarantees 
+
+In this section, we provide a proof of the Picard Convergence and an approximated error bound of our algorithm under specific definition and assumptions. 
+
+4.1 Assumptions 
+
+We now introduce the definitions and assumptions used for the proof of theoretical guarantees. Definition 4.1 and 4.2 provide necessary measure for evaluating the random proposal and error propagation. Assumption 4.1 and 4.2 are standard score controls inherited from the absorbing τ -leaping convergence theory in [ LHL +25 ] which allow us to isolate the additional error introduced by parallelizing the sequential sampler. Assumption 4.3 is a Dobrushin-style perturbation controlling condition, which can be considered as an analogue to the Lipschitz condition in continuous diffusion. 
+
+Assumption 4.1 (Score Estimation Error). Let t0 = T > t 1 > · · · > t Nfine = η be the serial fine grid. The estimated score satisfies PNfine −1 
+
+> ℓ=0
+
+(tℓ − tℓ+1 )LSE (bstℓ ) ≤ ε2score .
+
+5Assumption 4.2 (Bounded Score Estimate). There exists Mscore > 0 such that for all x, y ∈ [S]d
+
+with Qtℓ (y, x ) > 0, | log bstℓ (y, x )| ≤ log Mscore .
+
+Definition 4.1 (Fine cells and local proposal events). Let Qd be the set of fine-grid cells covering the early-stopped interval [η, T ]. For each q ∈ Q d, let ∆q be its fine-step width, tq its representative time, and aq = a(tq ) be the total unmasking rate of one active masked coordinate. Define 
+
+λq = ∆ q aq , ρq = λq e−λq ≤ λq = ∆ q aq
+
+Here ρq is the one-proposal probability at one active coordinate in cell q.For an input state z and cell randomness ωq , let Cq (z, ω q ) ⊆ [d] × [S] be the set of valid local proposal events generated in cell q. An event (i, c ) ∈ Cq (z, ω q ) means that coordinate i is locally proposed as token c.
+
+Assumption 4.3 (Normalized event switching). There exists a constant L⋆ > 0 such that, for every fine cell q and all relevant states z, z ′ ∈ X M ,
+
+Eωq [|Cq (z, ω q )△Cq (z′, ω q )|] ≤ L⋆ρq dH (z, z ′).
+
+This assumption works as a model-sensitivity condition in the Picard proof. The factor ρq captures how likely cell q is to produce a local proposal at all, and L⋆ controls how strongly a token-level perturbation of the input context can change the local proposal event set, whose constant property is also verified in Appendix F.1 and Figure 2. 
+
+Connection to score sensitivity. The event-switching condition can be viewed as a proposal-level analogue of a score Lipschitz condition. For masking diffusion, the reverse rate factorizes as 
+
+bμθ (z) = aq bpθi (c | z). If the normalized token posterior satisfies 
+
+X 
+
+> i
+
+1{zi = MASK }bpθi (· | z) − 1{z′ 
+
+> i
+
+= MASK }bpθi (· | z′) 1 ≤ Lscore dH (z, z ′),
+
+then, under the per-cell Poisson proposal coupling, the expected candidate-event switching obeys 
+
+Eωq [|Cq (z, ω q )△Cq (z′, ω q )|] ≤ Cρ q Lscore dH (z, z ′), where C is a constant depending on the way of coupling. Thus our normalized event-switching assumption is a direct algorithm-level consequence of a Dobrushin-type score sensitivity bound, with the proposal probability ρq separating temporal sparsity from model sensitivity. When most coordinates are still masked, the active posterior is high-entropy and a small perturbation of the revealed context can affect many remaining masked positions. Later in generation, most tokens have already been revealed, the active posterior becomes more confident, and both the number of active positions and the per-active-position posterior variation decrease. This predicts a decreasing 
+
+Lscore profile along the generation trajectory, which supports the view that the normalized posterior map becomes more stable as the context accumulates. Such dynamics is also applicable to L⋆.We verified the relation between Lscore and the mask proportion during the generation process in Appendix F.2. One may also refer to Appendix B for further discussion about the connection between this assumption and parallel-in-token properties of τ -leaping. 
+
+Definition 4.2 (Propagation masses). For each fine cell, set bq = L⋆ρq . If block n contains the fine cells Bn, define the block and global propagation mass by 
+
+Bn = X
+
+> q∈B n
+
+bq , Gd = X
+
+> q∈Q d
+
+bq = XNn=1 Bn.
+
+The quantity bq measures how many local proposal events can change per unit Hamming perturbation, 
+
+Bn controls the Picard difficulty of block n, and Gd controls the total propagation mass over the whole sampling interval. In particular, Bn is relatively small ( usually ≤ 1) because it counts realized proposal-event switching rather than all possible score changes: a perturbation affects the Picard error only when it changes a valid proposal event, whose probability is controlled by the one-proposal mass ρq . We also expect Bn to increase as sampling approaches the clean endpoint. In masking diffusion, the reverse unmasking scalar rate grows near the endpoint, which increases λq = ∆ q aq
+
+and hence the proposal probability ρq = λq e−λq . Therefore the actual propagation mass Bn can grow in the final blocks, which is precisely the regime controlled by early stopping. We also verified such dynamics and scale of Bn under text generation tasks in Appendix F.3. 
+
+Remark 4.1. Although the unweighted Lscore might be numerically large in the early high-noise region (around 40 to 50 in text generation tasks, see Appendix F.2), the tiny reverse proposal probability based on the noise schedule still ensures that the actual event-switching mass bq and hence Bn remain small for fast convergence of Picard iteration. 
+
+64.2 Picard Convergence 
+
+We first present the theorem for Picard convergence. 
+
+Theorem 4.1 (Picard convergence). For any fixed time gird [tn, t n+1 ], let B = PM −1 
+
+> r=0
+
+br and initialization error E0 = max  
+
+> 0≤m≤M
+
+E
+
+h
+
+dH
+
+by(1)  
+
+> τn,m
+
+, by(0) 
+
+> τn,m
+
+i 
+
+. Under Assumption 4.3, for every K ≥ 0,
+
+E
+
+h
+
+dH
+
+by(k) 
+
+> τn,M
+
+, by(∞)
+
+> τn,M
+
+i 
+
+≤ E0eB BK
+
+K! .
+
+We denote by by(∞) 
+
+> τn,M
+
+the fixed point of Picard iteration, which is exactly the sequential τ -leaping trajectory over the same block, fine grid, and random source. Similar to the proof of Proposition 1 in [SBE +23 ], since the m-th state in each block depends only on the input states at earlier microsteps 
+
+0, . . . , m − 1, the Picard iteration is triangular in time. Therefore, the serial trajectory is a fixed point of the iteration, and by induction on the microstep index it is the unique fixed point. Meanwhile, since any two states can at most be different on d coordinates, one may always take the initial error 
+
+E0 ≤ d. Based on the experiments in Appendix F.3, we verify that the propagation mass B is clearly smaller than 1 except for the terminal phase of generation. The theorem shows that the iteration residual of discrete diffusion under Hamming distance per-forms exponential-factorial contraction compared with typical exponential contraction in continuous diffusion [CRYR24]. Please refer to Appendix C.1 for the proof. 
+
+Remark 4.2. The exponential-factorial contraction in Theorem 4.1 is not exclusive to the discrete diffusion. It is actually the discrete analogue of the classical Volterra expansion for Picard iterations in continuous case. Please refer to Appendix C.3 for details. 
+
+Corollary 4.1 (Uniform-block Picard NFE). Assume tn − tn+1 = O(1) for any n ∈ [N ] and let 
+
+Bmax = max n Bn. Under Assumption 4.3, Then the choice 
+
+Kp =
+
+
+
+max 
+
+
+
+2eB max , 1log 2 log N de Bmax 
+
+ε
+
+ 
+
+= O  log( dε −1)
+
+ensures that TV( L(Y (Kp) 
+
+> N
+
+), L(Y (∞) 
+
+> N
+
+)) ≤ ε, where L(·) is the law of variables. 
+
+Here, we prove that an ε-level block endpoint TV error can be achieved with O(log 2 d) total NFE under constant level physical block width , which implies the true block-wise parallel sampling. Such result is also independent to the fine-grid partition and discretization error. Please refer to Appendix C.2 for the proof. 
+
+4.3 Total Complexity of Algorithm 1 
+
+We now connect the Picard endpoint theorem to a sequential convergence theorem for absorbing discrete diffusion. We take the absorbing τ -leaping sampler of [ LHL +25 ] as the serial reference that our Picard block iteration parallelizes. Let μ0 be the clean data distribution, μ⋆η the exact absorbing reverse law at early stopping time η, and 
+
+Aη the deterministic completion map used after early stopping. Let νθ, ∆seq be the output law of the absorbing serial τ -leaping sampler on the fine grid, and let νθ, ∆,K p 
+
+> pic
+
+be the output law of the Picard sampler with depth Kp. We define Eterm := TV( μ0, A η #μ⋆η ).
+
+Convergence of sequential τ -leaping (Theorem 2 in [ LHL +25 ]). The absorbing τ -leaping theo-rem gives a KL bound of the form 
+
+KL( μ⋆η ∥νθ, ∆seq ) ≤ EabsTL ,
+
+where, up to universal and logarithmic constants, 
+
+EabsTL := de −T log S + εscore + dS  T + log( Mscore η−1)  T + log η−12
+
+Nfine 
+
+.
+
+Here Nfine is the number of serial fine steps, εscore is the score entropy error, and Mscore is the bounded-score constant. The same result gives the early-stopping control Eterm ≲ dη . The theorem 7gives a KL bound for the early-stopped serial sampler by decomposing the error into initialization, score-estimation, and time-discretization terms. The main technical feature of the result is that it exploits the special geometry of the absorbing rate matrix. Unlike symmetric or uniform-rate chains, the absorbing rate matrix is highly asymmetric, so standard log-Sobolev mixing arguments are not directly applicable. Instead, the analysis uses the explicit form of the absorbing transition kernel and obtains score bounds only along valid absorbing transitions, namely those pairs (x, y ) with Q(y, x ) > 0. This avoids taking a uniform worst-case bound over all pairs of distinct states, which would be overly pessimistic for absorbing dynamics. As a result, the serial absorbing τ -leaping sampler achieves a dimension-linear step complexity, up to logarithmic and accuracy factors, for approximating the early-stopped target distribution. In our analysis, this theorem is used only as the serial discretization-and-score reference; the additional term we control is the Picard parallelization error between this serial sampler and our blockwise parallel sampler. 
+
+Proposition 4.1 (Total Variation error with absorbing τ -leaping reference). Assume the absorbing serial τ -leaping bound above and the Picard endpoint bound in Theorem 4.1. Then 
+
+TV( μ0, A η #νθ, ∆,K p 
+
+> pic
+
+) ≤ Eterm +
+
+r 12 EabsTL +
+
+> N
+
+X
+
+> n=1
+
+En, 0eBn BKp
+
+> n
+
+Kp! .
+
+The proposition works as a bridge connecting our Picard iteration error with the standard sequential 
+
+τ -leaping reference and its original truncation/discretization error. The key idea is a direct application of the triangle and Pinsker’s inequality for total variation. Please refer to Appendix D.1 for the proof. 
+
+Theorem 4.2 (Complexity of Picard τ -leaping). Let εtot ∈ R+. Under Assumption 4.1, 4.2, 4.3, the Algorithm 1 outputs a sample with 
+
+TV( μ0, A η #νθ, ∆,K p 
+
+> pic
+
+) ≤ εtot 
+
+within Nblock Kp = O
+
+
+
+log d log Sε2tot 
+
+· log dεtot 
+
+
+
+iterations and using space dM = O
+
+
+
+d Nfine 
+
+> Nblock
+
+
+
+by taking hyperparamters as 
+
+η = Θ( εtot /d ), T = O  log( dε −2tot log S) , Nfine = eO  dSε −2tot 
+
+ ,Nblock = O  log( dε −2tot log S) , Kp = O  log( dε −1tot ) .
+
+Here, we propose the full parameter schedule for our Picard method under εtot -level TV error, achieving O(log 2 d) level time complexity and eO  d2S level space complexity. Please refer to Appendix D.2 for proof details. 
+
+Remark 4.3. The preceding theorem uses constant physical block width, which balances the critical path and memory. If hardware limitations are ignored, one may instead place the entire early-stopped time horizon into a single Picard block as Nblock = 1 , which leads to even O(log d) level complexity. 
+
+Remark 4.4. Here the time complexity is defined based on NFE. When considering the total workload, since the first-hitting truncation in Algorithm E requires log M steps of parallel prefix scan in each block, to final complexity would be Nblock Kp log M . However, since log M = O(log d), the total workload is still at poly log( d) level. 
+
+## 5 Experiments 
+
+In this section, we empirically evaluate the performance of our parallel τ -leaping algorithm against sequential τ -leaping and related acceleration methods. 
+
+5.1 2D Toy Experiments 
+
+We first conduct oracle experiments on sampling Chessboard and Circle 2D distributions under different Picard depth. The results in Table 2 show rapid convergence of the Picard Iteration with significant NFE and runtime acceleration. More detailed settings are demonstrated in Appendix F.4. 8Table 2: Performance comparison on synthetic data.                                                                                              
+
+> Alg. KpChessboard Circle
+> Runtime (s) KL Divergence ↓NFE Runtime (s) KL Divergence ↓NFE Seq. /3.79 ±0.08 0.0068 ±0.0010 3200 4.77 ±0.21 0.1160 ±0.0094 3200 Par. 20.12 ±0.06 0.0491 ±0.0029 80 0.31 ±0.05 0.1335 ±0.0060 80 40.22 ±0.07 0.0233 ±0.0024 160 0.58 ±0.04 0.1146 ±0.0072 160 60.31 ±0.04 0.0093 ±0.0017 240 0.85 ±0.03 0.1118 ±0.0073 240 80.40 ±0.06 0.0054 ±0.0012 320 1.12 ±0.04 0.1121 ±0.0068 320 10 0.53 ±0.07 0.0056 ±0.0014 400 1.37 ±0.05 0.1119 ±0.0059 400
+
+Table 3: Oracle synthetic quality-matched scaling.                                                 
+
+> dSeq NFE Blocks MPara NFE NFE speedup Wall speedup Seq KL Para KL 256 288 48 696 3.0 ×1.28 ×0.0389 0.0418 512 540 54 10 108 5.0 ×2.06 ×0.0212 0.0227 1024 1080 60 18 120 9.0 ×4.03 ×0.0141 0.0164 2048 2048 64 32 128 16.0 ×8.73 ×0.0081 0.0097 4096 4104 72 57 144 28.5 ×12.45 ×0.0045 0.0049
+
+5.2 Dimensional Scaling 
+
+We next evaluate whether the Picard sampler exhibits favorable scaling with the sequence dimension in a controlled oracle setting. We test whether a growing number of sequential Picard blocks is sufficient to match a serial fine-grid reference as d increases. We use a block-product two-mode distribution on binary sequences. Each sample of length d is partitioned into groups of size g = 8 ,and each group independently follows qg (y) = 1−α 
+
+> 2
+
+δ0g (y) + 1−α 
+
+> 2
+
+δ1g (y) + α2−g with α = 0 .05 . 
+
+> (a) Selected Picard block count (b) Serial vs. Picard wall-clock
+
+Figure 1: Visualization for the scaling experiment. Table 3 and Figure 1 show the quality-matched scaling behavior. As d increases, the serial reference requires a linearly growing fine grid, while the selected Picard schedule uses a much more slowly growing number of blocks, closely following the logarithmic reference. With fixed Kp = 2 , this leads to a rapidly increasing critical-path NFE speedup, and the wall-clock measurements follow the same qualitative trend while maintaining near-serial KL quality. More visualization is in Appendix F.4. 
+
+5.3 Image Generation 
+
+The experiment utilized a MaskGiT-based score model [ BC23 , CZJ +22 ] pretrained on ImageNet [DDS +09 ]. We compared the performance of both sequential and parallel τ -leaping when generating 
+
+256 × 256 resolution images and evaluated the The Fréchet Inception Distance (FID) score based on 20k samples. We use classifier-free guidance with guidance scale w = 3 to match the settings 9Table 5: Generative perplexity of texts generated by different sampling algorithms on GPT-2 large.                                        
+
+> Method NFE = 32 NFE = 64 NFE = 128 NFE = 256 NFE = 512 NFE = 1024 FHS 188 .653 140 .420 124 .335 111 .959 113 .854 110 .946
+> Tweedie τ-leaping 160 .466 108 .431 83 .922 69 .745 53 .922 43 .451
+> τ-leaping 94 .918 67 .544 52 .384 41 .880 35 .498 30 .762
+> θ-Trapezoidal 87 .895 68 .587 50 .226 39 .119 32 .886 25 .309
+> Parallel (Ours) 82 .439 50 .858 40 .701 32 .510 25 .876 22 .099
+
+of baseline methods and verify the ability of combining our algorithm with inference-time control methods. The result in Table 4 shows that our parallel method achieves equivalent quality with half of the NFE. Check Appendix F.5 for more generated sample images. 
+
+5.4 Text Generation 
+
+Table 4: Comparison in image generation.              
+
+> Method NFE FID ↓
+> FHS 64 14.31 Parallel Decoding 64 13.07
+> τ-leaping 64 7.56
+> θ-Trapezoidal 64 6.59 Parallel (Ours) 32 6.82
+
+The experiment utilized an RADD-based score model [ ONX +24 ] pretrained on the OpenWeb-Text dataset [ GC19 ] which has GPT-2-level text generation capabilities [ RWC +19 ]. We compared the performance of both sequential and parallel 
+
+τ -leaping when generating 1024-token texts with vocabulary S = 50258 , and evaluated the aver-age generative perplexity score with 1024 sam-ples. The results in Table 5 show that our parallel method achieves better perplexity with fixed NFE, and actually achieve the same perplexity level with only half of the NFE compared with other sequential and high-order solvers. Please refer to Ap-pendix F.5 for more comparison results with DDPD [LNC +24]. 
+
+5.5 Runtime Acceleration 
+
+In addition to quality metrics such as FID and PPL, we measure the actual sampling wall-clock time of our Picard sampler against the time-sequential τ -leaping baseline. For a fair comparison, we match the quality-oriented sampling configuration and report pure sampling time, excluding the final image decoding overhead in the image experiment. The speedup is computed as the ratio between the serial runtime and the Picard runtime. The Picard parameters in both two tasks are set as M = 4 , K p = 2 .Table 6: Runtime comparison between sequential τ -leaping and Picard sampler.                       
+
+> Task Device Serial NFE Picard Block Picard NFE Time (serial / Picard) Speedup Text H100 128 N= 32 64 1.652 s / 1.139 s1.45 ×
+> Image RTX 4090 64 N= 16 32 1.603 s / 0.860 s1.86 ×
+
+Table 6 indicates that the NFE reduction translates into practical single-GPU acceleration, although the wall-clock gain is smaller than the ideal NFE ratio due to relatively heavy memory traffic. Based on the research in continuous diffusion [SBE +23], we expect better results in multi-GPU sampling. 
+
+## 6 Discussion and Conclusion 
+
+In this work, we proposed a parallel-in-time τ -leaping sampler for absorbing discrete diffusion based on Picard iteration, achieving O(log d) time complexity with TV-based error analysis and substantial improvement of NFE and runtime speed in experiments. Future work includes solving our method limitation by developing a sharper KL-level analysis of the Picard parallelization error and designing more memory-efficient variants, such as sliding-window Picard updates or adaptive block partitioning with multi-GPU experiments. Combining parallel-in-time sampling with improved serial solvers or sparse vocabulary computation may further improve scalability on large-scale discrete generation. 10 Acknowledgments and Disclosure of Funding 
+
+Wei Huang was supported by JSPS KAKENHI (24K20848) and JST BOOST (JPMJBY24G6). Yu Yao was supported by JST SPRING (JPMJSP2108), and JST ASPIRE-MWI (JPMJAP2405). Huanjian Zhou was supported by Next Generation Artificial Intelligence Research Center, The University of Tokyo. 11 References 
+
+[ACV24] Nima Anari, Sinho Chewi, and Thuy-Duong Vuong. Fast parallel sampling under isoperimetry. Proceedings of Thirty Seventh Conference on Learning Theory , pages 161–185, 2024. [AJH +21] Jacob Austin, Daniel D Johnson, Jonathan Ho, Daniel Tarlow, and Rianne Van Den Berg. Structured denoising diffusion models in discrete state-spaces. Advances in neural information processing systems , 34:17981–17993, 2021. [And65] Donald G Anderson. Iterative procedures for nonlinear integral equations. Journal of the ACM (JACM) , 12(4):547–560, 1965. [BC23] Victor Besnier and Mickael Chen. A pytorch reproduction of masked generative image transformer. arXiv preprint arXiv:2310.14400 , 2023. [BGH +20] Mohammad Bavarian, Badih Ghazi, Elad Haramaty, Pritish Kamath, Ronald L Rivest, and Madhu Sudan. Optimality of correlated sampling strategies. Theory of Computing ,16(1):1–18, 2020. [CAWZ23] Vincent Cohen-Addad, David P Woodruff, and Samson Zhou. Streaming Euclidean 
+
+k-median and k-means with o(log n) Space. In 2023 IEEE 64th Annual Symposium on Foundations of Computer Science (FOCS) . IEEE, 2023. [CBDB +22] Andrew Campbell, Joe Benton, Valentin De Bortoli, Thomas Rainforth, George Deli-giannidis, and Arnaud Doucet. A continuous time framework for discrete denoising models. Advances in Neural Information Processing Systems , 35:28266–28279, 2022. [CDPR25] Giovanni Conforti, Alain Durmus, Le-Tuyet-Nhi Pham, and Gael Raoul. Non-asymptotic convergence of discrete diffusion models: Masked and random walk dy-namics. arXiv preprint arXiv:2512.00580 , 2025. [CRYR24] Haoxuan Chen, Yinuo Ren, Lexing Ying, and Grant Rotskoff. Accelerating diffusion models with parallel sampling: Inference at sub-linear time complexity. Advances in Neural Information Processing Systems , 37:133661–133709, 2024. [CSL +25] Chen-Hao Chao, Wei-Fang Sun, Hanwen Liang, Chun-Yi Lee, and Rahul G Krishnan. Beyond masked and unmasked: Discrete diffusion models via partial masking. arXiv preprint arXiv:2505.18495 , 2025. [CY24] Hongrui Chen and Lexing Ying. Convergence analysis of discrete diffusion model: Exact implementation through uniformization. arXiv preprint arXiv:2402.08095 , 2024. [CYL +24] Zixiang Chen, Huizhuo Yuan, Yongqian Li, Yiwen Kou, Junkai Zhang, and Quanquan Gu. Fast sampling via discrete non-markov diffusion models with predetermined transition time. Advances in Neural Information Processing Systems , 37:106870– 106905, 2024. [CZJ +22] Huiwen Chang, Han Zhang, Lu Jiang, Ce Liu, and William T Freeman. Maskgit: Masked generative image transformer. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition , pages 11315–11325, 2022. [DDS +09] Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li, and Li Fei-Fei. Imagenet: A large-scale hierarchical image database. In 2009 IEEE conference on computer vision and pattern recognition , pages 248–255. Ieee, 2009. [DHW26] Daniil Dmitriev, Zhihan Huang, and Yuting Wei. Efficient sampling with discrete diffusion models: Sharp and adaptive guarantees. arXiv preprint arXiv:2602.15008 ,2026. [EM12] Matthew Emmett and Michael Minion. Toward an efficient parallel in time method for partial differential equations. Communications in Applied Mathematics and Computa-tional Science , 7(1):105–132, 2012. 12 [GC19] Aaron Gokaslan and Vanya Cohen. Openwebtext corpus. http://Skylion007. github.io/OpenWebTextCorpus , 2019. [GCB +22] Shuyang Gu, Dong Chen, Jianmin Bao, Fang Wen, Bo Zhang, Dongdong Chen, Lu Yuan, and Baining Guo. Vector quantized diffusion model for text-to-image syn-thesis. In Proceedings of the IEEE/CVF conference on computer vision and pattern recognition , pages 10696–10706, 2022. [GCC24] Shivam Gupta, Linda Cai, and Sitan Chen. Faster diffusion-based sampling with randomized midpoints: Sequential and parallel. arXiv e-prints , pages arXiv–2406, 2024. [Gil01] Daniel T Gillespie. Approximate accelerated stochastic simulation of chemically reacting systems. The Journal of chemical physics , 115(4):1716–1733, 2001. [Gla63] Roy J Glauber. Time-dependent statistics of the ising model. Journal of mathematical physics , 4(2):294–307, 1963. [GLRS23] Martin J Gander, Thibaut Lunet, Daniel Ruprecht, and Robert Speck. A unified analysis framework for iterative parallel-in-time algorithms. SIAM Journal on Scientific Computing , 45(5):A2275–A2303, 2023. [Gol08] Oded Goldreich. Computational complexity: a conceptual perspective. ACM Sigact News , 2008. [GSF +23] Nate Gruver, Samuel Stanton, Nathan Frey, Tim GJ Rudner, Isidro Hotzel, Julien Lafrance-Vanasse, Arvind Rajpal, Kyunghyun Cho, and Andrew G Wilson. Protein design with guided discrete diffusion. Advances in neural information processing systems , 36:12489–12517, 2023. [GV07] Martin J Gander and Stefan Vandewalle. Analysis of the parareal time-parallel time-integration method. SIAM Journal on Scientific Computing , 29(2):556–578, 2007. [HLJ +25] Xunpeng Huang, Yingyu Lin, Nishant Jain, Kaibo Wang, Difan Zou, Yian Ma, and Tong Zhang. On the complexity theory of masked discrete diffusion: From poly(1 /ϵ )
+
+to nearly ϵ-free. arXiv preprint arXiv:2509.21835 , 2025. [Hol07] Thomas Holenstein. Parallel repetition: simplifications and the no-signaling case. In 
+
+Proceedings of the thirty-ninth annual ACM symposium on Theory of computing , pages 411–419, 2007. [Kel11] Frank P Kelly. Reversibility and stochastic networks . Cambridge University Press, 2011. [KT02] Jon Kleinberg and Eva Tardos. Approximation algorithms for classification problems with pairwise relationships: Metric labeling and markov random fields. Journal of the ACM (JACM) , 49(5):616–639, 2002. [LHL +25] Yuchen Liang, Renxiang Huang, Lifeng Lai, Ness Shroff, and Yingbin Liang. Absorb and converge: Provable convergence guarantee for absorbing discrete diffusion models. In The Thirty-ninth Annual Conference on Neural Information Processing Systems ,2025. [LLLS25] Yuchen Liang, Yingbin Liang, Lifeng Lai, and Ness Shroff. Discrete diffusion models: Novel analysis and new sampler guarantees. arXiv preprint arXiv:2509.16756 , 2025. [LMT01] Jacques-Louis Lions, Yvon Maday, and Gabriel Turinici. A “parareal” in time discretiza-tion of pde’s. Comptes Rendus de l’Académie des Sciences. Série I. Mathématique ,332, 01 2001. [LNC +24] Sulin Liu, Juno Nam, Andrew Campbell, Hannes Stärk, Yilun Xu, Tommi Jaakkola, and Rafael Gómez-Bombarelli. Think while you generate: Discrete diffusion with planned denoising. arXiv preprint arXiv:2410.06264 , 2024. 13 [LSJ +22] Jose Lezama, Tim Salimans, Lu Jiang, Huiwen Chang, Jonathan Ho, and Irfan Essa. Discrete predictor-corrector diffusion models for image synthesis. In The Eleventh International Conference on Learning Representations , 2022. [LTSL26] Yuchen Liang, Zhiheng Tan, Ness Shroff, and Yingbin Liang. Sharp convergence rates for masked diffusion models. arXiv preprint arXiv:2602.22505 , 2026. [LY25] Hongyang Liu and Yitong Yin. Parallelize single-site dynamics up to dobrushin criterion. Journal of the ACM , 72(1):1–33, 2025. [LZB +22] Cheng Lu, Yuhao Zhou, Fan Bao, Jianfei Chen, Chongxuan Li, and Jun Zhu. Dpm-solver: A fast ode solver for diffusion probabilistic model sampling in around 10 steps. 
+
+Advances in neural information processing systems , 35:5775–5787, 2022. [ONX +24] Jingyang Ou, Shen Nie, Kaiwen Xue, Fengqi Zhu, Jiacheng Sun, Zhenguo Li, and Chongxuan Li. Your absorbing discrete diffusion secretly models the conditional distributions of clean data. arXiv preprint arXiv:2406.03736 , 2024. [PBP +25] Fred Zhangzhi Peng, Zachary Bezemek, Sawan Patel, Jarrid Rector-Brooks, Sherwood Yao, Avishek Joey Bose, Alexander Tong, and Pranam Chatterjee. Path planning for masked diffusion model sampling. arXiv preprint arXiv:2502.03540 , 2025. [RAR26] Liran Ringel, Ameen Ali, and Yaniv Romano. Dependency-guided parallel decoding in discrete diffusion language models. arXiv preprint arXiv:2604.02560 , 2026. [RCRY25] Yinuo Ren, Haoxuan Chen, Grant M Rotskoff, and Lexing Ying. How discrete and continuous diffusion meet: Comprehensive analysis of discrete diffusion models via a stochastic integral framework. In The Thirteenth International Conference on Learning Representations , 2025. [RCZ +25] Yinuo Ren, Haoxuan Chen, Yuchen Zhu, Wei Guo, Yongxin Chen, Grant M Rotskoff, Molei Tao, and Lexing Ying. Fast solvers for discrete diffusion models: Theory and applications of high-order algorithms. arXiv preprint arXiv:2502.00234 , 2025. [RVdOV19] Ali Razavi, Aaron Van den Oord, and Oriol Vinyals. Generating diverse high-fidelity images with vq-vae-2. Advances in neural information processing systems , 32, 2019. [RWC +19] Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei, Ilya Sutskever, et al. Language models are unsupervised multitask learners. OpenAI blog , 1(8):9, 2019. [SBE +23] Andy Shih, Suneel Belkhale, Stefano Ermon, Dorsa Sadigh, and Nima Anari. Parallel sampling of diffusion models. Advances in Neural Information Processing Systems ,36:4263–4276, 2023. [SDCS23] Yang Song, Prafulla Dhariwal, Mark Chen, and Ilya Sutskever. Consistency models. In Proceedings of the 40th International Conference on Machine Learning , pages 32211–32252, 2023. [SDG +25] Subham Sekhar Sahoo, Justin Deschenaux, Aaron Gokaslan, Guanghan Wang, Justin Chiu, and Volodymyr Kuleshov. The diffusion duality. arXiv preprint arXiv:2506.10892 , 2025. [SGH +24] Neta Shaul, Itai Gat, Marton Havasi, Daniel Severo, Anuroop Sriram, Peter Holderrieth, Brian Karrer, Yaron Lipman, and Ricky TQ Chen. Flow matching with general discrete paths: A kinetic-optimal perspective. arXiv preprint arXiv:2412.03487 , 2024. [SKS +24] Anirban Sarkar, Yijie Kang, Nirali Somia, Pablo Mantilla, Jessica Lu Zhou, Masayuki Nagai, Ziqi Tang, Chris Zhao, and Peter Koo. Designing dna with tunable regulatory activity using score-entropy discrete diffusion. bioRxiv , pages 2024–05, 2024. [SL19] Ruoqi Shen and Yin Tat Lee. The randomized midpoint method for log-concave sampling. Advances in Neural Information Processing Systems , 32, 2019. [SME20] Jiaming Song, Chenlin Meng, and Stefano Ermon. Denoising diffusion implicit models. 
+
+arXiv preprint arXiv:2010.02502 , 2020. 14 [SME24] Nikil R Selvam, Amil Merchant, and Stefano Ermon. Self-refining diffusion sam-plers: Enabling parallelization via parareal iterations. Advances in Neural Information Processing Systems , 37:5429–5453, 2024. [SSJP25] Junhyuk So, Jiwoong Shin, Chaeyeon Jang, and Eunhyeok Park. Pcm: Picard con-sistency model for fast parallel sampling of diffusion models. In Proceedings of the Computer Vision and Pattern Recognition Conference , pages 23313–23322, 2025. [TTL +24] Zhiwei Tang, Jiasheng Tang, Hao Luo, Fan Wang, and Tsung-Hui Chang. Accelerating parallel sampling of diffusion models. In Forty-first International Conference on Machine Learning , 2024. [VKS +22] Clement Vignac, Igor Krawczuk, Antoine Siraudin, Bohan Wang, Volkan Cevher, and Pascal Frossard. Digress: Discrete denoising diffusion for graph generation. arXiv preprint arXiv:2209.14734 , 2022. [WUH +24] Chenyu Wang, Masatoshi Uehara, Yichun He, Amy Wang, Tommaso Biancalani, Avantika Lal, Tommi Jaakkola, Sergey Levine, Hanchen Wang, and Aviv Regev. Fine-tuning discrete diffusion models via reward optimization with applications to dna and protein design. arXiv preprint arXiv:2410.13643 , 2024. [WZX +25] Chengyue Wu, Hao Zhang, Shuchen Xue, Zhijian Liu, Shizhe Diao, Ligeng Zhu, Ping Luo, Song Han, and Enze Xie. Fast-dllm: Training-free acceleration of diffusion llm by enabling kv cache and parallel decoding. arXiv preprint arXiv:2505.22618 , 2025. [XXF +25] Tianyu Xie, Shuchen Xue, Zijin Feng, Tianyang Hu, Jiacheng Sun, Zhenguo Li, and Cheng Zhang. Variational autoencoding discrete diffusion with enhanced dimensional correlations modeling. arXiv preprint arXiv:2505.17384 , 2025. [YD25] Lu Yu and Arnak Dalalyan. Parallelized midpoint randomization for langevin monte carlo. Stochastic Processes and their Applications , page 104764, 2025. [YMW25] Runpeng Yu, Xinyin Ma, and Xinchao Wang. Dimple: Discrete diffusion multimodal large language model with parallel decoding. arXiv preprint arXiv:2505.16990 , 2025. [YYW +23] Dongchao Yang, Jianwei Yu, Helin Wang, Wen Wang, Chao Weng, Yuexian Zou, and Dong Yu. Diffsound: Discrete diffusion model for text-to-sound generation. IEEE/ACM Transactions on Audio, Speech, and Language Processing , 31:1720–1733, 2023. [ZCM +24] Kaiwen Zheng, Yongxin Chen, Hanzi Mao, Ming-Yu Liu, Jun Zhu, and Qinsheng Zhang. Masked diffusion models are secretly time-agnostic masked models and exploit inaccurate categorical sampling. arXiv preprint arXiv:2409.02908 , 2024. [ZDYA24] Lingxiao Zhao, Xueying Ding, Lijun Yu, and Leman Akoglu. Unified discrete diffusion for categorical data. arXiv preprint arXiv:2402.03701 , 2024. [Zha25] Leo Zhang. The cosine schedule is fisher-rao-optimal for masked discrete diffusion models. arXiv preprint arXiv:2508.04884 , 2025. [ZS25] Huanjian Zhou and Masashi Sugiyama. Parallel simulation for log-concave sam-pling and score-based diffusion models. In Forty-second International Conference on Machine Learning , 2025. [ZWLK25] Yuanzhi Zhu, Xi Wang, Stephane Lathuiliere, and Vicky Kalogeiton. Dimo: Distilling masked diffusion models into one-step generator. arXiv preprint arXiv:2503.15457 ,2025. [ZYYK23] Lin Zheng, Jianbo Yuan, Lei Yu, and Lingpeng Kong. A reparameterized discrete diffusion model for text generation. arXiv preprint arXiv:2302.05737 , 2023. 15 Impact Statement This work primarily focuses on the algorithmic parallelization and theoretical complexity analysis of discrete diffusion models. As a fundamental algorithmic study, our core contribution lies in improving sampler convergence and hardware utilization via mathematical methods (Picard iteration), without introducing new model architectures or data biases. However, any improvement in generation efficiency objectively lowers the barrier for content creation. While the algorithm itself is neutral, faster generation capabilities, if misused, could accelerate the production of misinformation or spam. This is a general risk associated with generative models, which should be mitigated through content moderation and safe deployment strategies, rather than being a specific harm introduced by our work. 
+
+Compute Resources Report In this work, the text generation experiments were conducted on a single H100 96GB GPU, and all other experiments were conducted on a single RTX 4090 16G laptop GPU. 
+
+Notation Table 
+
+Table 7: Summary of notation used in the paper. 
+
+Notation Meaning 
+
+d Data dimension, sequence length, or number of coordinates. 
+
+S Vocabulary or codebook size. 
+
+X Generic finite CTMC state space. 
+
+X0 = [ S]d Clean state space. 
+
+XM = ([ S] ∪ { MASK })d Masked state space. 
+
+x, y, z Discrete states; z usually denotes a partially masked state. 
+
+xi, z i The i-th coordinate of x, z .
+
+zi→MASK State obtained by replacing coordinate i of z with MASK .
+
+zi←c State which replaced the masked coordinate i of z with token c.
+
+O(z) = {i : zi̸ = MASK } Observed, or unmasked, coordinate set of z.
+
+t Forward noising time; t = 0 is the clean-data endpoint. 
+
+T Maximum noising time and starting time of the reverse sampler. 
+
+η Early stopping time near the clean endpoint. 
+
+τi First reveal, or first-hitting, time of coordinate i.
+
+Masking diffusion notation 
+
+βt Forward masking rate, or noise schedule. 
+
+αt = exp( − R t 
+
+> 0
+
+βs ds ) Probability that a coordinate remains unmasked by time t.
+
+qt(z | x0) Forward marginal from clean sample x0 to masked state z.
+
+pdata Clean data distribution. 
+
+X0 Clean random variable sampled from pdata .
+
+πi(c | z) Clean-data posterior probability. 
+
+at = βtαt 
+
+> 1−αt
+
+Scalar time factor in the reverse unmasking rate. 
+
+bpθi (c | z) Learned conditional token posterior approximating πi(c | z).
+
+Fine-cell, event-switching, and Picard analysis notation 
+
+Qd Set of fine-grid cells covering the early-stopped interval [η, T ].
+
+q ∈ Q d Fine cell index. 
+
+∆q Width of fine cell q.
+
+tq Representative time of fine cell q.
+
+aq = a(tq ) Total unmasking rate of one active masked coordinate in cell q.
+
+λq = ∆ q aq Integrated one-coordinate proposal rate in cell q.
+
+ρq = λq e−λq One-proposal probability at one active coordinate in cell q.
+
+ωq Randomness associated with fine cell q.
+
+Cq (z, ω q ) ⊆ [d] × [S] Valid local proposal event set generated from state z in cell q.
+
+(i, c ) ∈ Cq (z, ω q ) Event that coordinate i is locally proposed as token c.
+
+△ Symmetric difference of sets. 
+
+Continued on next page 
+
+16 Notation Meaning 
+
+dH (z, z ′) Hamming distance between states z and z′.
+
+L⋆ Normalized event-switching sensitivity constant. 
+
+Lscore Score or posterior sensitivity constant in the Dobrushin-type bound. 
+
+bq = L⋆ρq Propagation mass of fine cell q.
+
+Bn Set of fine cells contained in block n.
+
+Bn = P 
+
+> q∈B n
+
+bq Propagation mass of block n.
+
+Gd = PNn=1 Bn Global propagation mass over the full early-stopped interval. 
+
+B = PM −1 
+
+> r=0
+
+br Propagation mass of a generic block. 
+
+Z(k) 
+
+> m
+
+State at microstep m after constructing the k-th Picard trajectory. 
+
+Y (k) = Z(k) 
+
+> M
+
+Block endpoint after k Picard iterations. 
+
+Y (∞) Limiting, or fixed-point, block endpoint. 
+
+ek(m) Adjacent Picard residual at microstep m.
+
+E0 = max 0≤m≤M e0(m) Maximum initial adjacent Picard residual within a block. 
+
+C<m = ( C0, . . . , C m−1) Prefix of local proposal sets. 
+
+Φm(C<m ) State obtained by applying first-hitting selection to the prefix C<m .
+
+C(k) 
+
+> r
+
+= Cr (Z(k) 
+
+> r
+
+, ω r ) Proposal event set generated in cell r from the k-th Picard input trajectory. 
+
+Cr (i) Token proposal subset for coordinate i in cell r.
+
+ϕi(C<m ) The i-th coordinate of Φm(C<m ).
+
+δi Indicator that the two first-hitting outputs differ at coordinate i.
+
+Error, distribution, and complexity notation 
+
+TV( P, Q ) Total variation distance between distributions P and Q.
+
+L(X) Law, or distribution, of random variable X.
+
+KL( P ∥Q) Kullback–Leibler divergence. 
+
+LSE (bstℓ ) Local score estimation error term at time tℓ.
+
+εscore Accumulated score estimation error. 
+
+Mscore Bounded-score constant. 
+
+μ0 Clean data distribution. 
+
+μ⋆η Exact absorbing reverse law at early stopping time η.
+
+Aη Deterministic completion map applied after early stopping. 
+
+Aη #P Pushforward of distribution P through Aη .
+
+νθ, ∆seq Output law of the absorbing serial τ -leaping sampler on the fine grid. 
+
+νθ, ∆,K p 
+
+> pic
+
+Output law of the Picard sampler with depth Kp.
+
+Eterm Early-stopping completion error. 
+
+EabsTL Error upper bound from the absorbing serial τ -leaping reference. 
+
+Epic Picard endpoint or parallelization error. 
+
+εtot Target total variation error. 
+
+h0 Constant physical block width. 
+
+eO(·) Asymptotic order suppressing logarithmic factors. 
+
+Appendix and experiment-specific notation 
+
+F (s, x ) Vector field in the continuous Picard analogy. 
+
+L(s) Time-dependent Lipschitz coefficient of F .
+
+BT = R T 
+
+> 0
+
+L(s) ds Total Lipschitz mass in the continuous Picard analogy. 
+
+g Group size in the dimensional scaling synthetic experiment. 
+
+qg (y) Group-level synthetic target distribution. 
+
+α Mixture weight in the synthetic block-product experiment; distinct from αt.
+
+δ0g , δ 1g Point masses at the all-zero and all-one groups. 
+
+rin , r out Inner and outer radii of the circle or annulus distribution. 
+
+w Classifier-free guidance scale. 
+
+Continued on next page 
+
+17 Notation Meaning 
+
+Lswitch  
+
+> d
+
+Empirical normalized event-switching sensitivity estimator. 
+
+Uq Cumulative candidate-event set difference at fine cell q.
+
+Dq Cumulative Hamming difference between adjacent Picard inputs at fine cell q.
+
+Lq = Uq /(ρq Dq ) Local event-switching ratio. 
+
+## A Related Work 
+
+A.1 Discrete Diffusion models 
+
+Masked and Uniformed discrete diffusion models have developed from a wide range of aspects. [ AJH +21 ] provides foundational formalisms for discrete diffusion—multi-nomial corruption and structured transition matrices as the absorbing states. [ CSL +25 ] introduce intermediate token states between masked/unmasked to avoid redundant computation when sequences barely change across steps. [VKS +22 ] performs discrete denoising on graphs by noising/denoising categorical node and edge types. [ GCB +22 ] code sequences with discrete diffusion for text-to-image, improving quality and speed versus auto-regressive token decoders. [ GSF +23 ] introduces NOS guidance to design protein sequences directly in sequence space, demonstrating antibody optimization in vitro. [ WUH +24 ] optimizes discrete diffusion generators with task rewards to design biomolecular sequences. 
+
+A.2 Acceleration for Discrete Diffusion Sampling 
+
+So far, there have been numerous studies on accelerating sampling for discrete diffusion models. [ CYL +24 ] replaces the standard Markov chain with a non-Markov schedule to skip steps and cut the number of network calls without retraining. [ SDG +25 ] adapts consistency distillation to dis-crete diffusion by constructing the duality connection between continuous and discrete diffusion. [ ZWLK25 ] proposes a token initialization strategy that injects randomness while maintaining sim-ilarity to teacher training distribution, achieving one-step distillation of masked diffusion models. [ ZYYK23 , ONX +24 ] design equivalent reparameterization of discrete diffusion that yields more effective training and decoding strategies. [ WZX +25 ] develops confidence-aware parallel decoding to accelerate multi-token sampling while maintaining accuracy. [ Zha25 ] gives a principled choice of discretization schedule for efficient sampling. [ SGH +24 ] allows arbitrary discrete probability paths, giving more control to find shorter or easier trajectories with fewer steps for discrete generation. [ ZDYA24 ] derives a simple backward denoising formula, enabling exact and accelerated sampling and unifying discrete-time and continuous-time discrete diffusion. 
+
+A.3 Parallel-In-Time Acceleration and Picard Iteration 
+
+As a classical method of solving differential equations, parallel-in-time sampling has also been widely applied to various fields. [ LMT01 ] and [ GV07 ] proposed and analyzed the ’Parareal’ method for solving PDEs which using a coarse propagator to rapidly propagate global information and running a fine propagator iteratively in each sub-time intervals for error correction. [ EM12 ] designed a iterative space-time multigrid-like PDE numerical method for which conducts spectral deferred correction sweeps on multiple time steps in parallel. [ GLRS23 ] proposed a unified framework for these parallel-in-time numerical solvers. [ SME24 ] utilizes the parareal method to accelerate continuous diffusion sampling by generating rough samples at first and running parallel refinement to push the trajectories converge to serial ODE solutions. [ ACV24 ] designs a Picard-based parallelize Langevin Monte Carlo method for sampling log-density smooth continuous distributions following the log-Sobolev inequality. [ SBE +23 ] pro-poses the ParaDiGMS method for continuous diffusion acceleration which is compatible with various mainstream sequential solvers such as DDIM [ SME20 ] and DPMSolver [ LZB +22 ]. [ CRYR24 ]provides strict theoretical analysis about the error bound and time-complexity of Picard-based con-tinuous diffusion, and [ ZS25 ] proposes a faster parallel-in-time continuous diffusion sampler by combining the Picard Iteration with diagonal time slices technique. [ GCC24 ] and [ YD25 ] utilizes both Picard Iteration and randomized midpoint method in log-concave sampling [ SL19 ] for faster 18 parallel continuous diffusion sampling and Langevin Monte Carlo. [ TTL +24 ] reframed fixed-point Picard iterations as a nonlinear root-finding problem, proposing an acceleration technique based on Anderson Acceleration [ And65 ]. [ SSJP25 ] combines the idea of Picard Iteration with the consistency model [ SDCS23 ]. It trains the model to directly predict the Picard fixed-point solution with exact convergence by the model switching. 
+
+A.4 Parallel Discrete Sampling 
+
+A related but distinct line of work studies parallel sampling for discrete distributions via Markov chains, especially single-site dynamics such as Glauber dynamics or Gibbs sampling [ Gla63 ]. [ LY25 ]shows that such dynamics can be faithfully parallelized up to Dobrushin-type conditions by pre-sampling the continuous-time update schedule and solving the resulting dependency structure in parallel, using correlated sampling to control the propagation of local disagreements [ KT02 , Hol07 ,BGH +20 ]. This yields parallel simulation of the same underlying Markov chain rather than a new approximate transition rule. This differs from discrete diffusion sampling based on τ -leaping, where each discretization step already performs coordinate-parallel updates by evolving independent one-dimensional CTMCs with the score frozen at the beginning of the step. Thus the main question is not how to faithfully parallelize an existing sequential single-site chain, but how many such score-frozen parallel steps are needed to control the discretization bias. In particular, Dobrushin-style local sensitivity conditions are useful for understanding stability of local proposals, but they do not directly reduce the serial number of τ -leaping steps unless combined with additional structure controlling the dependence among simultaneously updated coordinates. 
+
+Remark Although continuous diffusion and its parallel-in-time acceleration methods have already been well-established with detailed theoretical and empirical analysis, due to the significant gap of mathematical framework between discrete and continuous diffusion such as random source, dynamics and regularity condition, it is difficult to directly transfer continuous analysis tools and methods to the discrete case. Table 8 shows the main difference between discrete and continuous diffusion settings. Table 8: Continuous vs. discrete diffusion from the viewpoint of stochastic simulation.                 
+
+> Aspect Continuous diffusion Discrete diffusion
+> Randomness Brownian motion Poisson State space Rd([ S]∪[MASK]) d
+> Dynamics SDE / ODE jump process Score ∇xlog pt(x)jumping rate Regularity condition Lipschitz score Dobrushin event-switching bound (Assumption 4.3)
+
+## B Further discussion on Assumption 4.3 
+
+Assumption 4.3 and its alternative form of score sensitivity is analogous to a Dobrushin-type condition, where one controls the influence of a single coordinate on the update distribution of other coordinates. In the language of a weighted dependency graph, if wj→i denotes the influence of token j on the posterior/update rule of token i, such a condition roughly implies P 
+
+> i
+
+wj→i = O(1) for every token 
+
+j. Thus each token has bounded total outgoing influence, similar to a bounded Dobrushin influence norm in the parallel MCMC sampling theory [LY25]. However, this is not the quantity that controls whether one can safely unmask a large batch of tokens in a single τ -leaping step. Suppose the currently revealed set is V , and the next step simultaneously unmasks a set U . A coordinate-parallel τ -leaping update effectively uses the product approximation 
+
+q(xU |xV ) ≈ Y
+
+> i∈U
+
+q(xi|xV ),
+
+because all tokens in U are sampled in parallel from the old state xV . The error of this approximation depends on the residual dependence inside the batch U , , for example through the internal edge 19 weight 
+
+W (U ) = X
+
+> i,j ∈Ui̸=j
+
+wj→i.
+
+A bounded single-node sensitivity condition only gives bounded weighted out-degree. It does not imply that W (U ) is small for a large batch U . Indeed, even if every node has O(1) total outgoing influence, the full dependency graph may still have total edge weight O(d). A large random batch can therefore contain O(|U |), or even O(d), total internal dependency weight. This distinction is important for τ -leaping since it is already token-parallel within each discretization step. Its remaining serial complexity comes from how aggressively one can increase the unmasking probability per step without introducing excessive bias. Local score sensitivity ensures that perturba-tions do not propagate too strongly from any single token, but aggressive unmasking requires stronger information-theoretic conditions [ DHW26 ] saying that the simultaneously unmasked tokens have small conditional total correlation given the previously revealed tokens at distribution level. 
+
+## C Proofs of results in Section 4.2 
+
+C.1 Proof of Theorem 4.1 
+
+We first introduce and prove some necessary lemmas. 
+
+Lemma C.1 (Global mass bound for loglinear masking) . Assume L⋆ = O(1) and the loglinear masking rate satisfies a(t) ≍ 1/t near the clean-data endpoint. Then 
+
+Gd ≤ L⋆
+
+X
+
+> q∈Q d
+
+∆q aq .
+
+Moreover, for a sufficiently fine grid, 
+
+X
+
+> q∈Q d
+
+∆q aq = O
+
+Z Tη
+
+a(t)d t
+
+!
+
+= O
+
+
+
+log Tη
+
+
+
+.
+
+If T is at most logarithmic in d and η ≍ ε/d with a constant ε, then, up to lower-order logarithmic factors, 
+
+Gd = O
+
+
+
+log dε
+
+
+
+.
+
+Proof. By Definition 4.1 and 4.2, we have 
+
+Gd = L⋆
+
+X
+
+> q∈Q d
+
+ρq ≤ L⋆
+
+X
+
+> q∈Q d
+
+∆q aq .
+
+When the fine grid resolves the interval [η, T ], the last sum is a Riemann sum for the time-rate integral. Since a(t) ≍ 1/t near the endpoint, 
+
+X
+
+> q∈Q d
+
+∆q aq = O
+
+Z Tη
+
+1
+
+t dt
+
+!
+
+= O
+
+
+
+log Tη
+
+
+
+.
+
+Substituting η ≍ ε/d gives log( T /η ) = log( T d/ε ). If T grows at most logarithmically in d, the additional log T term is lower order compared with log( d/ε ), which proves the claim. Fix a block and suppress its block index. Let the block contain M fine cells indexed by r =0, . . . , M − 1. Let Z(k) 
+
+> m
+
+be the state at the m-th microstep after the k-th Picard trajectory has been constructed, where m = 0 , . . . , M . The block start is fixed, so Z(k)0 is the block input for all k. Let 
+
+C(k) 
+
+> r
+
+= Cr (Z(k) 
+
+> r
+
+, ω r )
+
+be the local proposal events generated in cell r from the k-th Picard input trajectory. Define the adjacent Picard residual 
+
+ek(m) = E
+
+h
+
+dH
+
+
+
+Z(k+1)  
+
+> m
+
+, Z (k)
+
+> m
+
+i 
+
+.
+
+The endpoint is defined as Y (k) = Z(k) 
+
+> M
+
+.20 Lemma C.2 (First-hitting stability) . Fix a block start state x. For a prefix of local proposal sets C<m = ( C0, . . . , C m−1), let Φm(C<m ) be the state obtained from x by applying, for each coordinate, only its earliest proposed token in the prefix. Then, for any two prefixes C<m and C′
+
+> <m
+
+,
+
+dH
+
+ Φm(C<m ), Φm(C′
+
+> <m
+
+) ≤
+
+> m−1
+
+X
+
+> r=0
+
+|Cr △C′ 
+
+> r
+
+|.
+
+Proof. For coordinate i, write 
+
+Cr (i) = {c ∈ [S] : ( i, c ) ∈ Cr }.
+
+By Definition 4.1, Cr (i) contains at most one token. Let ϕi(C<m ) be the i-th coordinate of 
+
+Φm(C<m ). Thus ϕi(C<m ) = xi if Cr (i) = ∅ for every r < m , and otherwise ϕi(C<m ) is the token in the earliest nonempty Cr (i).Define 
+
+δi = 1{ϕi(C<m )̸ = ϕi(C′
+
+> <m
+
+)}.
+
+We first prove the coordinate-wise inequality 
+
+δi ≤
+
+> m−1
+
+X
+
+> r=0
+
+|Cr (i)△C′ 
+
+> r
+
+(i)|.
+
+If the right-hand side is zero, then every summand is zero, so Cr (i) = C′ 
+
+> r
+
+(i) for all r < m . Hence the two coordinate-level proposal histories are identical. They either both contain no proposal for coordinate i, in which case both outputs equal xi, or they have the same earliest nonempty cell and the same token there. In both cases ϕi(C<m ) = ϕi(C′
+
+> <m
+
+), so δi = 0 . This proves the coordinate-wise inequality. Summing over coordinates gives 
+
+dH
+
+ Φm(C<m ), Φm(C′
+
+> <m
+
+) =
+
+> d
+
+X
+
+> i=1
+
+δi ≤
+
+> d
+
+X
+
+> i=1
+> m−1
+
+X
+
+> r=0
+
+|Cr (i)△C′ 
+
+> r
+
+(i)|.
+
+Reordering the finite sums yields 
+
+> d
+
+X
+
+> i=1
+> m−1
+
+X
+
+> r=0
+
+|Cr (i)△C′ 
+
+> r
+
+(i)| =
+
+> m−1
+
+X
+
+> r=0
+> d
+
+X
+
+> i=1
+
+|Cr (i)△C′ 
+
+> r
+
+(i)|.
+
+Since Cr is the disjoint union of the coordinate-level sets {i} × Cr (i),
+
+> d
+
+X
+
+> i=1
+
+|Cr (i)△C′ 
+
+> r
+
+(i)| = |Cr △C′ 
+
+> r
+
+|.
+
+Substituting this identity proves the lemma. 
+
+Lemma C.3 (Triangular Picard recursion) . Under Assumption 4.3, for every m = 0 , . . . , M and 
+
+k ≥ 0,
+
+ek+1 (m) ≤
+
+> m−1
+
+X
+
+> r=0
+
+br ek(r).
+
+Proof. For m = 0 , both sides are zero because the block start is the same for all Picard iterates. Let 
+
+m ≥ 1.By construction, the (k + 2) -nd Picard state at microstep m is obtained by applying first-hitting selection to the local proposals generated from the (k + 1) -st Picard input trajectory. Therefore, 
+
+Z(k+2)  
+
+> m
+
+= Φ m(C(k+1) 0 , . . . , C (k+1)  
+
+> m−1
+
+).
+
+Similarly, 
+
+Z(k+1)  
+
+> m
+
+= Φ m(C(k)0 , . . . , C (k)
+
+> m−1
+
+).
+
+21 Applying Lemma C.2 to these two prefixes gives 
+
+dH
+
+
+
+Z(k+2)  
+
+> m
+
+, Z (k+1) 
+
+> m
+
+
+
+≤
+
+> m−1
+
+X
+
+> r=0
+
+|C(k+1)  
+
+> r
+
+△C(k) 
+
+> r
+
+|.
+
+Taking expectations yields 
+
+ek+1 (m) ≤
+
+> m−1
+
+X
+
+> r=0
+
+E
+
+h
+
+|C(k+1)  
+
+> r
+
+△C(k) 
+
+> r
+
+|
+
+i
+
+.
+
+For a fixed r, the two sets C(k+1)  
+
+> r
+
+and C(k) 
+
+> r
+
+are generated with the same cell randomness ωr from inputs Z(k+1)  
+
+> r
+
+and Z(k) 
+
+> r
+
+. Conditioning on these two inputs and using Assumption 4.3, 
+
+E
+
+h
+
+|C(k+1)  
+
+> r
+
+△C(k) 
+
+> r
+
+| | Z(k+1)  
+
+> r
+
+, Z (k)
+
+> r
+
+i
+
+≤ L⋆ρr dH
+
+
+
+Z(k+1)  
+
+> r
+
+, Z (k)
+
+> r
+
+
+
+.
+
+Taking expectation again and using br = L⋆ρr gives 
+
+E
+
+h
+
+|C(k+1)  
+
+> r
+
+△C(k) 
+
+> r
+
+|
+
+i
+
+≤ br ek(r).
+
+Substituting this bound into the previous display proves the recursion. Now we restate Theorem 4.1 and start the main proof. 
+
+Theorem C.1 (Picard endpoint convergence) . Let 
+
+B = 
+
+> M−1
+
+X
+
+> r=0
+
+br , E0 = max  
+
+> 0≤m≤M
+
+e0(m).
+
+Under Assumption 4.3, the block endpoint iterates converge in expected Hamming distance to a limit 
+
+Y (∞), and for every K ≥ 0,
+
+E
+
+h
+
+dH
+
+
+
+Y (K), Y (∞)i 
+
+≤ E0eB BK
+
+K! .
+
+For block n, the same statement holds with B = Bn. One may always take E0 ≤ d.Proof. We first prove a bound on adjacent endpoint residuals. We claim that for every K ≥ 0,
+
+eK (M ) ≤ E0
+
+BK
+
+K! .
+
+For K = 0 , this is immediate from the definition of E0. Now let K ≥ 1. Repeatedly applying Lemma C.3 gives 
+
+eK (M ) ≤ X
+
+> r1<M
+
+br1 eK−1(r1).
+
+Applying the recursion to eK−1(r1) gives 
+
+eK−1(r1) ≤ X
+
+> r2<r 1
+
+br2 eK−2(r2).
+
+Substituting, 
+
+eK (M ) ≤ X
+
+> r2<r 1<M
+
+br1 br2 eK−2(r2).
+
+Continuing this expansion for K steps yields 
+
+eK (M ) ≤ X 
+
+> rK<r K−1<··· <r 1<M
+
+br1 · · · brK e0(rK ).
+
+Since e0(rK ) ≤ E0,
+
+eK (M ) ≤ E0SK , SK := X 
+
+> rK<··· <r 1<M
+
+br1 · · · brK .
+
+22 It remains to bound SK . Expanding BK gives 
+
+BK = 
+
+> M−1
+
+X
+
+> r=0
+
+br
+
+!K
+
+= X  
+
+> (i1,...,i K)∈{ 0,...,M −1}K
+
+bi1 · · · biK .
+
+All terms are nonnegative. Hence BK is at least the sub-sum over tuples with K distinct indices. For each unordered subset {a1, . . . , a K } of K distinct indices, the product Q 
+
+> a
+
+ba appears exactly K!
+
+times in the distinct-index tuple expansion, once for each permutation. The strictly decreasing chains in SK are in one-to-one correspondence with these unordered subsets. Therefore 
+
+BK ≥ K!SK , SK ≤ BK
+
+K! .
+
+Thus 
+
+eK (M ) ≤ E0
+
+BK
+
+K! .
+
+Now fix L > K . By the triangle inequality for Hamming distance, 
+
+dH (Y (L), Y (K)) ≤
+
+> L−1
+
+X
+
+> ℓ=K
+
+dH (Y (ℓ+1) , Y (ℓ)).
+
+Taking expectations and using Y (ℓ) = Z(ℓ) 
+
+> M
+
+gives 
+
+E[dH (Y (L), Y (K))] ≤
+
+> L−1
+
+X
+
+> ℓ=K
+
+eℓ(M ) ≤ E0
+
+> L−1
+
+X
+
+> ℓ=K
+
+Bℓ
+
+ℓ! .
+
+The exponential series converges, so the right-hand side tends to zero as K, L → ∞ . Hence the endpoints are Cauchy in expected Hamming distance and have a limit, denoted Y (∞).Letting L → ∞ in the previous inequality gives 
+
+E[dH (Y (∞), Y (K))] ≤ E0
+
+> ∞
+
+X
+
+> ℓ=K
+
+Bℓ
+
+ℓ! .
+
+Finally, ∞X
+
+> ℓ=K
+
+Bℓ
+
+ℓ! = BK
+
+K!
+
+> ∞
+
+X
+
+> j=0
+
+Bj K!(K + j)! .
+
+Since K!j! ≤ (K + j)! , we have K!/(K + j)! ≤ 1/j !. Hence 
+
+> ∞
+
+X
+
+> j=0
+
+Bj K!(K + j)! ≤
+
+> ∞
+
+X
+
+> j=0
+
+Bj
+
+j! = eB .
+
+Therefore 
+
+E[dH (Y (∞), Y (K))] ≤ E0eB BK
+
+K! .
+
+This completes the proof. 
+
+C.2 Proof of Corollary 4.1 
+
+We restate Corollary 4.1 for reference and start the main proof. 
+
+Corollary C.1 (Uniform-block Picard NFE) . Let H := T − η be the early-stopped sampling horizon. Choose a constant physical block width h0 > 0 independent of d and ε, and partition [η, T ] into 
+
+N =
+
+ Hh0
+
+
+
+23 uniform physical-time blocks, with the last block possibly shorter. Under Assumption 4.3, given 
+
+T = O(log( d log S/ε )) , let Bmax = max n Bn. Then Bmax ≤ Gd, and the choice 
+
+Kp =
+
+
+
+max 
+
+
+
+2eB max , 1log 2 log N de Bmax 
+
+ε
+
+ 
+
+ensures that the Picard endpoint TV error is at most ε. Consequently, 
+
+Kp = O
+
+
+
+log dε
+
+
+
+, NFE Picard = N K p = O
+
+
+
+log dε · log d log Sε
+
+
+
+.
+
+Proof. The role of the block count is to keep the physical width of each Picard block uniformly bounded. Since the early-stopped horizon has length H = T − η, choosing 
+
+N =
+
+ Hh0
+
+
+
+implies that every non-final block has width h0 and the final block has width at most h0. Thus all block widths are O(1) . Since h0 is a constant and η ≤ T ,
+
+N ≤ Th0
+
++ 1 = O(T ).
+
+The assumption T = O(log( d log S/ε )) therefore gives 
+
+N = O
+
+
+
+log d log Sε
+
+
+
+.
+
+For block n, Theorem 4.1 gives 
+
+E[dH (Y (Kp) 
+
+> n
+
+, Y (∞) 
+
+> n
+
+)] ≤ En, 0eBn BKp
+
+> n
+
+Kp! .
+
+By coupling the Picard and fixed-point block endpoints using the same block randomness, 
+
+TV( L(Y (Kp) 
+
+> n
+
+), L(Y (∞) 
+
+> n
+
+)) ≤ E[dH (Y (Kp) 
+
+> n
+
+, Y (∞) 
+
+> n
+
+)] .
+
+Using the first block where the two coupled chains disagree and then applying a union bound over blocks, 
+
+Epic ≤
+
+> N
+
+X
+
+> n=1
+
+En, 0eBn BKp
+
+> n
+
+Kp! .
+
+Since En, 0 ≤ d and Bn ≤ Bmax ,
+
+Epic ≤ N de Bmax BKp
+
+> max
+
+Kp! .
+
+It is enough to make the last expression at most ε.Using K! ≥ (K/e )K ,
+
+BK
+
+> max
+
+K! ≤
+
+ eB max 
+
+K
+
+K
+
+.
+
+Thus it suffices that 
+
+N de Bmax 
+
+ eB max 
+
+K
+
+K
+
+≤ ε. 
+
+Equivalently,  KeB max 
+
+K
+
+≥ N de Bmax 
+
+ε ,
+
+or 
+
+K log 
+
+ KeB max 
+
+
+
+≥ log N de Bmax 
+
+ε .
+
+24 If K ≥ 2eB max , then log( K/ (eB max )) ≥ log 2 . If also 
+
+K ≥ 1log 2 log N de Bmax 
+
+ε ,
+
+then the previous inequality holds. This proves the displayed sufficient choice of Kp.It remains to simplify the order. Since the blocks partition the fine grid, 
+
+Bmax ≤
+
+> N
+
+X
+
+> n=1
+
+Bn = Gd.
+
+By Lemma C.1, 
+
+Bmax = O
+
+
+
+log dε
+
+
+
+, N = O
+
+
+
+log d log Sε
+
+
+
+.
+
+The first term in the maximum defining Kp is therefore O(log( d/ε )) . For the second term, 
+
+log N de Bmax 
+
+ε = log N + log dε + Bmax .
+
+The term log N is lower order because N is logarithmic, and Bmax has the same logarithmic order. Hence the second term is also O(log( d/ε )) . Therefore 
+
+Kp = O
+
+
+
+log dε
+
+
+
+.
+
+Combining this with N = O(log( d/ε )) gives 
+
+NFE Picard = N K p = O
+
+
+
+log dε · log d log Sε
+
+
+
+.
+
+C.3 Proof of the exponential-factorial contraction in continuous diffusion 
+
+Consider the integral equation usually used in continuous diffusion analysis: 
+
+X(t) = X0 +
+
+Z t
+
+> 0
+
+F (s, X (s)) ds, 0 ≤ t ≤ T, 
+
+and its Picard iteration 
+
+X(k+1) (t) = X0 +
+
+Z t
+
+> 0
+
+F (s, X (k)(s)) ds. 
+
+Assume that F is Lipschitz in its state argument with a time-dependent coefficient L(s), namely 
+
+∥F (s, x ) − F (s, y )∥ ≤ L(s)∥x − y∥.
+
+Define the adjacent Picard error 
+
+ek(t) := ∥X(k+1) (t) − X(k)(t)∥.
+
+Then 
+
+ek+1 (t) ≤
+
+Z t
+
+> 0
+
+L(s)ek(s) ds. 
+
+Indeed, subtracting two consecutive Picard updates gives 
+
+X(k+2) (t) − X(k+1) (t) = 
+
+Z t
+
+> 0
+
+h
+
+F (s, X (k+1) (s)) − F (s, X (k)(s)) 
+
+i
+
+ds. 
+
+Taking norms and applying the Lipschitz condition yields 
+
+ek+1 (t) = ∥X(k+2) (t) − X(k+1) (t)∥ ≤ 
+
+Z t
+
+> 0
+
+L(s)∥X(k+1) (s) − X(k)(s)∥ ds =
+
+Z t
+
+> 0
+
+L(s)ek(s) ds. 
+
+25 Iterating this Volterra inequality gives an ordered-time expansion. Let 
+
+BT := 
+
+Z T
+
+> 0
+
+L(s) ds 
+
+and assume e0(t) ≤ E0 for all t ∈ [0 , T ]. For K = 1 ,
+
+e1(T ) ≤
+
+Z T
+
+> 0
+
+L(s1)e0(s1) ds 1.
+
+For K = 2 ,
+
+e2(T ) ≤
+
+Z T
+
+> 0
+
+L(s1)
+
+Z s1
+
+> 0
+
+L(s2)e0(s2) ds 2 ds 1.
+
+Repeating this argument yields 
+
+eK (T ) ≤ E0
+
+Z 
+
+> 0<s K<··· <s 1<T K
+
+Y
+
+> ℓ=1
+
+L(sℓ) ds K · · · ds 1.
+
+The ordered simplex {0 < s K < · · · < s 1 < T } is one of the K! equal-ordering regions of [0 , T ]K .Since the integrand QKℓ=1 L(sℓ) is symmetric in the variables s1, . . . , s K , we have 
+
+Z 
+
+> 0<s K<··· <s 1<T K
+
+Y
+
+> ℓ=1
+
+L(sℓ) ds K · · · ds 1 = 1
+
+K!
+
+Z T
+
+> 0
+
+L(s) ds 
+
+!K
+
+= BKT
+
+K! .
+
+Therefore, 
+
+eK (T ) ≤ E0
+
+BKT
+
+K! .
+
+If X⋆ denotes the fixed point of the integral equation, then the fixed-point error can be controlled by summing the adjacent errors: 
+
+∥X⋆(T ) − X(K)(T )∥ ≤ 
+
+> ∞
+
+X
+
+> ℓ=K
+
+eℓ(T ) ≤ E0
+
+> ∞
+
+X
+
+> ℓ=K
+
+BℓT
+
+ℓ! .
+
+Using the elementary tail bound ∞X
+
+> ℓ=K
+
+BℓT
+
+ℓ! ≤ eBT BKT
+
+K! ,
+
+we obtain 
+
+∥X⋆(T ) − X(K)(T )∥ ≤ E0eBT BKT
+
+K! .
+
+For reverse SDEs with state-independent diffusion coefficient, the same argument applies pathwise when all Picard iterates are driven by the same Brownian path with fixed random seeds, since the stochastic integral term cancels after subtracting two consecutive iterates. Hence, the factor BK /K !
+
+in our discrete first-hit Picard analysis should be viewed as the time-discrete version of the classical ordered-simplex factor in continuous Picard theory. 
+
+## D Proofs of results in Section 4.3 
+
+D.1 Proof of Proposition 4.1 
+
+We restate Proposition 4.1 for reference and start the main proof. 
+
+Proposition D.1 (Total TV error with absorbing τ -leaping reference) . Assume the absorbing serial 
+
+τ -leaping bound above and the Picard endpoint bound in Theorem 4.1. Then 
+
+TV( μ0, A η #νθ, ∆,K p 
+
+> pic
+
+) ≤ Eterm +
+
+r 12 EabsTL +
+
+> N
+
+X
+
+> n=1
+
+En, 0eBn BKp
+
+> n
+
+Kp! .
+
+26 Proof. Insert the two intermediate distributions Aη #μ⋆η and Aη #νθ, ∆seq . By the triangle inequality for total variation, 
+
+TV( μ0, A η #νθ, ∆,K p 
+
+> pic
+
+) ≤ TV( μ0, A η #μ⋆η )+ TV( Aη #μ⋆η , A η #νθ, ∆seq )+ TV( Aη #νθ, ∆seq , A η #νθ, ∆,K p 
+
+> pic
+
+).
+
+The first term is Eterm . Since deterministic maps cannot increase total variation, 
+
+TV( Aη #P, A η #Q) ≤ TV( P, Q ),
+
+the second term is bounded by TV( μ⋆η , ν θ, ∆seq ). Pinsker’s inequality and the absorbing serial KL bound give 
+
+TV( μ⋆η , ν θ, ∆seq ) ≤
+
+r 12 KL( μ⋆η ∥νθ, ∆seq ) ≤
+
+r 12 EabsTL .
+
+For the third term, couple the serial and Picard samplers by using the same block random sources. For any coupled random variables X and Y ,
+
+TV( L(X), L(Y )) ≤ P(X̸ = Y ) ≤ E[dH (X, Y )] .
+
+Applying this relation to the first block where the coupled endpoints differ and then using a union bound over blocks gives 
+
+TV( νθ, ∆seq , ν θ, ∆,K p 
+
+> pic
+
+) ≤
+
+> N
+
+X
+
+> n=1
+
+En, 0eBn BKp
+
+> n
+
+Kp! ,
+
+by Theorem 4.1. Combining the displayed inequalities proves the claim. 
+
+D.2 Proof of Theorem 4.2 
+
+We restate Theorem 4.2 for reference and start the main proof. 
+
+Theorem D.1 (Global complexity) . Let the target total variation error be εtot . Under Assump-tion 4.1, 4.2, 4.3, suppose the score error is controlled at order ε2tot , then choosing 
+
+η = Θ( εtot /d ), T = O
+
+
+
+log d log Sε2tot 
+
+
+
+, Nfine = eO
+
+ dS ε2tot 
+
+
+
+controls the serial and early-stopping terms. With constant physical block width, the number of blocks and Picard depth with 
+
+Nblock = O
+
+
+
+log d log Sε2tot 
+
+
+
+, Kp = O
+
+
+
+log dεtot 
+
+
+
+makes the Picard term of order εtot . Consequently, the global time and space complexity are 
+
+Nblock Kp = O
+
+
+
+log d log Sε2tot 
+
+· log dεtot 
+
+
+
+, O(dM ) = O
+
+
+
+d Nfine 
+
+N
+
+
+
+= eO
+
+ d2Sε2tot 
+
+
+
+Proof. The early-stopping term is O(dη ), so η = Θ( εtot /d ) makes it O(εtot ). The serial contribution enters the total TV bound through Pinsker, so we require 
+
+EabsTL = O(ε2tot ).
+
+The initialization part de −T log S is then controlled by taking 
+
+T = O
+
+
+
+log d log Sε2tot 
+
+
+
+.
+
+The discretization part of EabsTL is 
+
+dS  T + log( Mscore η−1)  T + log η−12
+
+Nfine 
+
+.
+
+27 Thus it is at most O(ε2tot ) whenever 
+
+Nfine = eO
+
+ dS ε2tot 
+
+
+
+,
+
+where logarithmic factors in d, 1/η , 1/ε tot , and Mscore are hidden. For the Picard part, choosing a constant physical block width gives Nblock = O(T ). Moreover, Lemma C.1 yields 
+
+Bmax ≤ Gd = O
+
+
+
+log dεtot 
+
+
+
+.
+
+The safe depth choice in Corollary 4.1 then gives 
+
+Kp = O
+
+
+
+log dεtot 
+
+
+
+.
+
+Multiplying this by Nblock = O(T ) proves the claimed NFE bound. 
+
+## E Algorithm of the first-hitting truncation 
+
+Algorithm 2 provides details about how our first-hitting truncation is implemented during the Picard sampling. We treat this first-hitting mechanism as a single abstract operation in the theory. Given the local proposal events in a block prefix, the first-hitting operation returns the state obtained by applying, for each coordinate, only its earliest proposed token. This abstraction keeps the analysis focused on the only property needed for convergence: first-hitting does not amplify event-level discrepancies. 
+
+Algorithm 2 First-Hitting Truncation (FHT) 
+
+Input: Block-start state bytn and jump sequence ∆by(k)0 , . . . , ∆by(k) 
+
+> M−1
+
+Output: Truncated jump sequence ∆by(k)0 , . . . , ∆by(k)  
+
+> M−1
+> 1:
+
+For all coordinates i and microsteps j, define hj,i ← 1{∆by(k)
+
+> j,i
+
+̸ = 0 }. 
+
+> 2:
+
+Compute the prefix counts sj,i ← Pjℓ=0 hℓ,i for all i, j using a parallel prefix scan over j. 
+
+> 3:
+
+For all i, j in parallel, set ∆by(k) 
+
+> j,i
+
+← ∆by(k) 
+
+> j,i
+
+1{bytn,i = MASK } 1{sj,i = 1 }. 
+
+> 4:
+
+return ∆by(k)0 , . . . , ∆by(k) 
+
+> M−1
+
+## F Extra Experiment Results and Details 
+
+In this section, we provide more details and results of the experiments. 
+
+F.1 Assumption Verification 
+
+In this section, we empirically verify Assumption 4.3. To assess the normalized event-switching sensitivity L⋆ along actual generation trajectories, we compute an on-trajectory weighted constant estimator Lswitch d = ( P 
+
+> q
+
+Uq )/(P 
+
+> q
+
+ρq Dq ). Here Uq is the cumulative candidate-event set difference at fine cell q, Dq is the cumulative Hamming difference between adjacent Picard inputs at that cell, and ρq is the one-proposal probability. Equivalently, Lswitch  
+
+> d
+
+is a weighted average of the local ratios 
+
+Lq = Uq /(ρq Dq ) with weights proportional to ρq Dq . Since ρq Dq is the exposure of cell q in the Picard error recursion, this estimator emphasizes the cells that contribute most to aggregate iteration error. Empirically, as shown in Figure 2, Lswitch  
+
+> d
+
+remains between 2.31 and 2.50 for d ∈ [128 , 640] , with fitted log-log slope −0.043 , supporting the assumption that the effective normalized sensitivity is dimension-independent along generation trajectories. 28 Figure 2: Visualization of L⋆.
+
+F.2 Lscore Estimation 
+
+In this experiment, we measure the unweighted score sensitivity along RADD text generation at sequence length d = 512 . The sampler uses 64 Picard blocks, M = 4 fine microsteps per block, and Picard depth Kp = 2 , corresponding to 256 underlying fine-grid microsteps and 128 critical-path model evaluations. For a trajectory state z, we construct a perturbed state z′ by modifying revealed context tokens while keeping the mask pattern fixed. We then compare the normalized ordinary-token posteriors on the remaining MASK positions and compute 
+
+Lscore (z, z ′) = 
+
+P 
+
+> i:zi=MASK
+
+bpθi (· | z) − bpθi (· | z′) 1
+
+dH (z, z ′) .
+
+As shown in Figure 3, Lscore is largest when the context is highly incomplete and decreases as more tokens are revealed. This agrees with our expectation that when most coordinates are masked, a small context perturbation can affect many active posterior distributions; later in generation, fewer positions remain active and the posterior becomes more confident, leading to a smaller aggregate sensitivity. 
+
+Figure 3: Visualization of Lscore .29 F.3 Block Mass Estimation 
+
+To quantify the scale of Bn in Definition 4.2, we estimate it along a d = 512 RADD text-generation run with N = 64 blocks, M = 4 microsteps per block, Kp = 2 , 128 sampling rounds, and 16 replay seeds per recorded state pair. As shown in Figure 4, the estimated block masses remain constant-scale: the mean is 0.273 , the median is 0.223 , the 90 -th percentile is 0.528 , and the maximum is 1.260 , with the smallest blocks close to zero. Thus most blocks have Bn < 1, while the largest values occur near the clean endpoint. This supports both the practical small-constant behavior assumed in the Picard contraction analysis and the need for early stopping to avoid the most singular terminal region. 
+
+Figure 4: Visualization of Bn.
+
+F.4 Synthetic data 
+
+In this section we provide more details about synthetic experiments. 
+
+F.4.1 2D Toy Model Chessboard The chessboard distribution has several key characteristics that make it an excellent test benchmark: (1) Discrete: The distribution is defined on a finite set of points on a two-dimensional grid; (2) Sparse: Nearly half of the grid points have a probability of exactly zero. A successful sampler must learn to restrict its generated samples strictly to the points that have non-zero probability mass (i.e., the support of the distribution); (3) Multi-modal: The probability mass is distributed across multiple, disconnected modes rather than being concentrated in a single region. The sampler is required to capture all of these distinct modes; (4) Structured: It exhibits a distinct, non-random geometric structure. This challenges the sampler’s ability to reproduce the correct global pattern, rather than merely matching general statistical moments. We conduct the experiment on a 8 × 8 chessboard distribution with varying Picard iteration depths 
+
+Kp. We fix N = 40 , M = 80 with totally 4096 samples. Runtimes and KL Divergence are averaged over 20 runs. 
+
+Circle The ring distribution on a 2D discrete grid concentrates its entire probability mass on grid points located within an annulus defined by an inner radius rin and an outer radius rout . A key characteristic is its Non-Convexity; the high-probability region encloses a central "hole" of zero probability, which leads to the distribution’s support non-convex. Another defining feature is its Connectivity. Unlike the disjoint, multi-modal structure of the checkerboard distribution, the support of the ring distribution forms a single connected component, meaning any point on the ring can traverse to any other point through a series of steps to adjacent locations. 30 Figure 5: Visualization of the chessboard experiments. (Left) The target distribution. (Middle) The Picard sampling result. (Right) The sequential sampling result. We conduct the experiment on a circle distribution at 32 × 32 2D grid with varying Picard iteration depths Kp. We fix N = 40 , M = 80 with totally 4096 samples. Runtime and KL Divergence are averaged over 20 runs. 
+
+Figure 6: Visualization of the circle experiments. (Left) The target distribution. (Middle) The Picard sampling result. (Right) The sequential sampling result. 
+
+F.4.2 Dimensional Scaling Oracle target and metrics. The oracle conditional probabilities are computed exactly from the partially unmasked group state to remove score approximation error. Since each sequence contains 
+
+d/g independent groups, reliable group-level statistics can be obtained with a small batch size; we use only 8 samples for every d to avoid large-batch bandwidth effects. Quality is measured on the empirical group distribution. We report the per-coordinate group KL together with group TV and off-mode mass during schedule selection. The serial reference uses an oracle masked tau-leaping fine grid with Nfine (d) ≈ d. For the Picard sampler we fix Kp = 2 and search over logarithmic block schedules, selecting the smallest block count whose sampling quality remain within prescribed margins of the serial reference. More visualization results are in Figure 7. 
+
+F.5 Real-world data 
+
+In this section we provide more results and samples for text/image generation tasks. The real-data experiment code is built based on the open-source codebase of [RCZ +25]. Figure 8 demonstrates sample images generated by our parallel method. Table 9 shows the comparison results between DDPD [LNC +24] and our parallel method. Table 10 demonstrates the GPU memory cost under certain parameter settings for both image and text generation tasks. We would like to mention that, the MaskGIT we used in the image experiment utilizes the VQVAE [RVdOV19 ] to compress images into a discrete latent space with only 1024 codebook size and 16*16 sequence length, while the RADD for text generation works in a raw high-dimensional token space. 31 (a) Quality under selected schedule (b) Selected Picard block count  
+
+> (c) NFE and wall-clock speedup (d) Serial vs. Picard wall-clock
+
+Figure 7: Oracle synthetic quality-matched scaling experiment. Panel (a) compares the per-coordinate group KL of the selected Picard schedule with the serial oracle reference. Panel (b) shows that the selected number of Picard blocks grows much more slowly than the linear reference. Panel (c) compares the critical-path NFE speedup with the measured wall-clock speedup. Panel (d) reports the absolute wall-clock sampling time of the serial and Picard samplers. 
+
+Figure 8: Generated samples from the Imagenet experiments. Therefore, MaskGIT has much lower codebook and sequence dimensions, which can significantly decrease the active memory cost for each token sequence in the transformer. What’s more, a large portion of memory for MaskGIT is likely occupied by static model weights, which do not scale with the parallel width M. The dynamic increase from parallelization is a small fraction of the total footprint. 32 Table 9: Generative perplexity of texts generated by DDPD and Picard τ -leaping 
+
+Method NFE Perplexity 
+
+DDPD-small softmax 1024 41.342 DDPD-medium softmax 1024 34.166 DDPD-small sigmoid 1024 30.587 DDPD-medium sigmoid 1024 28.025 Ours 512 25.876 Table 10: Parameter settings and GPU memory cost for image and text generation. Tasks Seq. Cost Para. Cost M N Kp
+
+Text 6.7GB 11.6GB 8 32 2Image 3.0GB 3.7GB 10 20 233

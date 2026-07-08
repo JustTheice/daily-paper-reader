@@ -1,0 +1,832 @@
+Title: SLIM-RL: Risk-Budgeted Random-Masking RL for Diffusion LLMs Without Trajectory Slicing
+
+URL Source: https://arxiv.org/pdf/2607.00208v1
+
+Published Time: Thu, 02 Jul 2026 00:18:47 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+Preprint. Under review. 
+
+# SLIM-RL: Risk-Budgeted Random-Masking RL for Diffusion LLMs Without Trajectory Slicing 
+
+Ruikang Zhao ∗
+
+Technical University of Denmark 
+
+Zhenting Wang 
+
+MBZUAI Institute of Foundation Models 
+
+Han Gao 
+
+Iowa State University 
+
+Ligong Han *
+
+Red Hat AI Innovation & MIT–IBM Watson AI Lab 
+
+## Abstract 
+
+Reinforcement learning for diffusion large language models (dLLMs) has largely moved to trajectory-aware methods. The current state of the art, TraceRL, holds that random masking is mismatched with the model’s infer-ence trajectory, and it reconstructs that trajectory during training by slicing each rollout into up to ⌈K/s⌉ trajectory-aligned training samples, a cost that grows with the block size K. We show that this mismatch can be mitigated without reconstructing the trajectory. Our method, SLIM-RL , bounds the commit risk of each rollout step with a τ-budget decoder, reducing ag-gregate commit risk in the training data. During optimization, SLIM-RL trains on these risk-controlled rollouts with a trace-free random-masking objective that adapts variance-reduction tools, combining sequence-level importance sampling, deterministic quadrature over masking levels under a mean-preserving, monotonically decreasing per-block mask schedule that we introduce. On SDAR-4B, SLIM-RL matches TraceRL’s best MATH500 accuracy on only 0.46 × its training samples at block size 16, improving over TraceRL by 6.32% on MATH500 and 11.05% on GSM8K under matched dynamic sampling. At block size 4, the 4B SLIM-RL surpasses the larger LLaDA-8B and Dream-7B dLLMs on math, exceeding LLaDA-8B by 10.76% on MATH500 while staying below the autoregressive Qwen2.5-7B. On code, it improves over TraceRL by 4.20% on MBPP and 3.65% on HumanEval. The 
+
+τ-budget decoder transfers training-free across LLaDA, Dream, and SDAR. The source code is available at https://github.com/laolaorkkkkk/SLIM-RL .
+
+## 1 Introduction 
+
+Diffusion Large Language Models (dLLMs) (Nie et al., 2026; Sahoo et al., 2024; Ye et al., 2025) generate text by iteratively denoising a masked sequence, refining many positions at once instead of strictly left to right. Block-wise variants (Arriola et al., 2025; Cheng et al., 2026) decode consecutive blocks autoregressively while denoising within each block, which restores KV-cache reuse. Reinforcement learning has become the standard way to improve their reasoning (Zhao et al., 2026; Wang et al., 2025b; Hu et al., 2026; He et al., 2025; Zhu et al., 2025b; Tang et al., 2026; Liu et al., 2026; Zhu et al., 2025a). Early work applies RL to randomly masked targets (Zhao et al., 2026; Yang et al., 2026), but random masking yields high-variance gradient estimates (Zhu et al., 2025a), and recent work has therefore moved toward trajectory-aware methods (Huang et al., 2026; Wang et al., 2026). The current state of the art, TraceRL (Wang et al., 2025b), trains not on random masks but on the model’s exact decoding trajectory, on the view that under random masking the post-training objective is mismatched with the trajectory the model follows at inference. 
+
+> ∗
+
+Correspondence to: Ruikang Zhao (ruikangzhao@gmail.com ) and Ligong Han (hanligong@gmail.com ). 
+
+1
+
+> arXiv:2607.00208v1 [cs.CL] 30 Jun 2026
+
+Preprint. Under review. Preserving the trajectory is not free. To train on each decoding step in order, TraceRL slices a single rollout into up to ⌈K/s⌉ trajectory-aligned training samples, one forward each, where 
+
+K is the block size and s≥1 a shrinkage factor (Wang et al., 2025b). At full fidelity ( s=1) one rollout becomes up to K samples, so the data grows with K. Raising the shrinkage s
+
+bounds the cost but aggregates s consecutive decoding steps into one slice and discards their internal order, trading trajectory fidelity for cost. A larger block therefore makes a trade-off between slicing cost and trajectory fidelity, which we quantify in Section 4.5. The question is whether reconstructing the exact trajectory is necessary. Without slicing, a dLLM-RL run still faces two weaknesses at two independent stages, rollout generation and optimization. Rollouts are generated with dynamic sampling (Wu et al., 2025; Yu et al., 2025), the common rollout decoder across dLLM-RL methods including TraceRL, which commits every token whose confidence exceeds a fixed threshold τ. Because this rule is pointwise, a step that unmasks many positions only marginally above τ over-commits and injects several errors into the rollout. At optimization, random masking makes the policy-gradient estimate high-variance (Zhu et al., 2025a). In this work, we address both stages and call the resulting recipe SLIM-RL , which combines three components developed in Section 3. A τ-budget dynamic-unmasking decoder, a single-pass training-free rule shared by rollout and inference, caps each step’s cumulative confidence-based uncertainty. A variance-reduced framework then updates the policy, built from a sequence-level length-normalized ratio (Zheng et al., 2025), deterministic quadrature over masking levels (Rojas et al., 2025), and an unnormalized advantage (Liu et al., 2025). A mean-preserving, monotonically decreasing per-block mask schedule front-loads the policy-gradient signal onto the earliest, most-conditioned block. On SDAR-4B, SLIM-RL outperforms trajectory-aware TraceRL on math at block size 16 and on both math and code at block size 4, where the 4B model also surpasses the larger LLaDA-8B and Dream-7B diffusion models, and reaches TraceRL’s best accuracy on under half the training data (Table 6). The margin widens with block size, and Section 4 reports the per-benchmark results. Our contributions are summarized as follows: • We show that reconstructing the exact decoding trajectory is not required to match trajectory-aware RL at equal training cost. With rollout commit risk bounded and the masking objective variance-reduced, trace-free random masking is on par with trajectory-aligned slicing at block size 4 and outperforms it at block size 16. • We introduce a τ-budget dynamic-unmasking decoder that commits only the largest low-uncertainty subset of positions whose cumulative uncertainty ∑i(1 − pi) stays within a calibrated budget m(1 − τ), in contrast to dynamic sampling’s per-position threshold. It is training-free and transfers across LLaDA, Dream, and SDAR. • We introduce a mean-preserving, monotonically decreasing per-block mask sched-ule that concentrates the policy-gradient signal on the earliest, most-conditioned block, adding 5.91% on MATH500 over random masking. • On SDAR-4B at block size 16, SLIM-RL achieves 6.32% and 11.05% higher accuracy than TraceRL on MATH500 and GSM8K under matched decoding, and reaches TraceRL’s best accuracy on 0.46 × the training data. At block size 4, it achieves higher accuracy than the larger LLaDA-8B and Dream-7B diffusion models across math and code, and improves over TraceRL on code by 4.20% on MBPP and 3.65% on HumanEval. On SDAR-1.7B, SLIM-RL reaches TraceRL’s best on 0.76 × the training data. 
+
+## 2 Preliminaries 
+
+2.1 Diffusion Large Language Models Forward and reverse processes. Given a prompt x and a clean response y = ( y1, . . . , yL),a diffusion large language model (dLLM) (Nie et al., 2026; Ye et al., 2025) defines a for-2Preprint. Under review. ward corruption process and a learned reverse generation process. The forward process independently replaces each token with the mask symbol [MASK ] at masking level t ∈ [0, 1 ]:
+
+qt(yt | y) = 
+
+> L
+
+# ∏
+
+> i=1
+
+qt(yit | yi), (1) where each token is independently masked according to qt(yit=[ MASK ] | yi) = t and 
+
+qt(yit=yi | yi) = 1 − t, so that y0 is the clean response and y1 is fully masked. For reverse process, starting from y1, the model iteratively predicts masked positions and resamples a less-noised yr from yt (r < t) until y0 is recovered. 
+
+Block-wise dLLMs. Vanilla dLLMs denoise the full response under bidirectional atten-tion, which prevents KV-cache reuse and is expensive for long responses. Block-wise dLLMs (Arriola et al., 2025; Cheng et al., 2026) partition the response into B consecutive blocks Y1, . . . , YB of size K, where Yb = ( y(b−1)K+1, . . . , ybK ). Attention is bidirectional within a block and causal across blocks, so blocks are generated sequentially while tokens within each block are denoised in parallel. This yields the block-causal factorization 
+
+πθ (y | x) = 
+
+> B
+
+# ∏
+
+> b=1
+
+πθ (Yb | x, Y<b) (2) which preserves KV-cache compatibility across blocks while retaining intra-block paral-lelism. 
+
+Confidence-driven decoding. At each denoising step s, the model scores every masked position by its max-confidence pi = max v∈V pθ (yi 
+
+> 0
+
+= v | ys, x), where ys is the partially denoised sequence at step s, and commits position i only when pi > τ for a fixed threshold 
+
+τ. Aggressive thresholds (small τ) commit more tokens per step but inject errors that propagate through later denoising. Conservative thresholds preserve quality but require more refinement steps, eroding the parallelism advantage of dLLMs. 
+
+2.2 GRPO for dLLMs 
+
+For each prompt x ∼ D, the old policy samples a group of G responses {yj}Gj=1 ∼
+
+πθold (· | x) with scalar rewards {rj}Gj=1 and the standardized advantage ˆAj = (rj −
+
+mean {ri})/ std {ri}. Standard GRPO (Shao et al., 2024) defines a token-level importance ratio ρkj (θ) = πθ (ykj | x, y<kj )/πθold (ykj | x, y<kj ) and maximizes the per-token clipped surro-gate 1 
+
+> G
+
+∑j 1  
+
+> |yj|
+
+∑k min  ρkj ˆAj, clip (ρkj , 1 −ϵ, 1 +ϵ) ˆAj
+
+, regularized by βDKL [πθ ∥ πref ] toward a reference policy. For dLLMs, the per-token conditional πθ (ykj | x, y<kj ) is intractable in closed form because the model parameterizes pθ (· | yt, x) at masked positions rather than via a left-to-right factorization. Random-masking dLLM-RL methods (Gong et al., 2025; Yang et al., 2026) factorize the sequence probability into per-token denoising terms and approximate the ratio on sampled corruptions eyj(t) of each response at masking level t ∼ U[0, 1 ]:
+
+ρkj (θ) ≈ pθ
+
+ ykj | x, eyj(t)
+
+pθold 
+
+ ykj | x, eyj(t) , k ∈ U j(t), (3) where Uj(t) denotes the masked positions in eyj(t).
+
+## 3 Method 
+
+SLIM-RL separates dLLM RL into two stages: risk-controlled rollout collection, then trace-free low-variance optimization. A τ-budget decoder (Section 3.1) shapes the rollouts by 3Preprint. Under review. Dynamic Sampling vs. -Budget Dynamic 
+
+A. Dynamic Sampling threshold 
+
+Initial block (partially denoised) Result after Dynamic Sampling 
+
+> 1
+> 0.96
+> [M]
+> 2
+> [b]
+> 3
+> 0.95
+> [M]
+> 4
+> [d]
+> 5
+> 0.84
+> [M]
+> 6
+> 0.94
+> [M]
+> 7
+> 0.75
+> [M]
+> 8
+> 0.86
+> [M]
+> masked positions (1, 3, 5, 6, 7, 8)
+> 1
+> 0.96
+> [a]
+> 2
+> [b]
+> 3
+> 0.95
+> [c]
+> 4
+> [d]
+> 5
+> 0.84
+> [M]
+> 6
+> 0.94
+> [f]
+> 7
+> 0.75
+> [M]
+> 8
+> 0.86
+> [M]
+> commit all confident tokens
+> 0.96, 0.95, 0.94 >
+> committed (newly decoded)
+> fixed context (not decoded)
+> still masked
+
+B. -Budget Dynamic 
+
+Initial block (partially denoised) Result after -Budget Dynamic   
+
+> 1
+> 0.96
+> 0.04
+> [M]
+> 2
+> —
+> —
+> [b]
+> 3
+> 0.95
+> 0.05
+> [M]
+> 4
+> —
+> —
+> [d]
+> 5
+> 0.84
+> 0.16
+> [M]
+> 6
+> 0.94
+> 0.06
+> [M]
+> 7
+> 0.75
+> 0.25
+> [M]
+> 8
+> 0.86
+> 0.14
+> [M]
+> masked positions (1, 3, 5, 6, 7, 8)
+> 1
+> 0.96
+> 0.04
+> [a]
+> 2
+> —
+> —
+> [b]
+> 3
+> 0.95
+> 0.05
+> [M]
+> 4
+> —
+> —
+> [d]
+> 5
+> 0.84
+> 0.16
+> [M]
+> 6
+> 0.94
+> 0.06
+> [c]
+> 7
+> 0.75
+> 0.25
+> [M]
+> 8
+> 0.86
+> 0.14
+> [M]
+> deferred
+> deferred high-confidence candidate (> )
+> Above-threshold candidates: ; then sort by uncertainty
+
+Figure 1: Dynamic sampling versus τ-budget unmasking at one denoising step. Both rules start from the same partially denoised block and the same above-threshold candidate set As,the three positions whose confidence exceeds τ=0.9. (A) Dynamic sampling commits every candidate, finalizing all three including the position with confidence 0.94. (B) τ-budget assigns each candidate the uncertainty ui=1−pi, sorts ascending, and commits only the largest prefix whose cumulative uncertainty stays within the budget Bs=m(1−τ)= 0.10. bounding the cumulative uncertainty committed at each denoising step; a low-variance random-masking objective then updates the policy on them (Sections 3.2 and 3.3), with a mean-preserving decreasing per-block mask schedule (Section 3.4) concentrating the gradient signal on the earliest, most-conditioned block. 
+
+3.1 τ-Budget Dynamic Unmasking 
+
+τ-budget dynamic unmasking is training-free and used for both RL rollout generation and test-time inference. At denoising step s, let Ms denote the currently masked positions in the active block, and let pi = max v∈V pθ (yi 
+
+> 0
+
+= v | ys, x) be the model’s max-confidence at position i. The threshold-based candidate set 
+
+As = {i ∈ M s : pi > τ} (4) is the set of positions standard dynamic sampling would commit at step s. We assign each candidate the confidence-based uncertainty ui = 1 − pi and define the cumulative step-level uncertainty of a set S ⊆ A s as U(S) = ∑i∈S ui = ∑i∈S (1 − pi). Given a risk-budget schedule m ≥ 1, we set the step-level budget Bs = m(1 − τ). We sort the candidates by ascending uncertainty ui1 ≤ ui2 ≤ · · · ≤ ui|A s | and commit the largest prefix of this ordering whose cumulative uncertainty stays within the budget: 
+
+ks = max 
+
+(
+
+k :
+
+> k
+
+# ∑
+
+> r
+
+=1
+
+uir ≤ B s
+
+)
+
+,
+
+Cs = {i1, . . . , iks }.(5) The remaining positions stay masked for subsequent denoising steps. If As = ∅, we commit the single masked position with the highest confidence. Figure 1 contrasts τ-budget with 4Preprint. Under review. dynamic sampling on a single denoising step, and Algorithm 2 gives the full single-pass decoder. 
+
+Interpretation: a calibrated wrong-commit budget. Let WrongCommit s = ∑i∈C s 1{ ˆyi̸ =
+
+y∗ 
+
+> i
+
+} count committed positions that disagree with the correct token. If max-confidence approximated the probability that the argmax is correct, then E[WrongCommit s] ≈
+
+∑i∈C s (1 − pi) = U(Cs) ≤ B s, so the budget caps a calibrated proxy for the expected wrong commitments per step. Pointwise thresholding instead commits all of As, whose aggregate uncertainty grows with the number of accepted tokens, so many marginally-above-threshold positions can together inject large step-level risk. The calibration assumption holds only approximately, so we treat it as motivation and τ-budget rollouts commit fewer expected-wrong tokens per step than dynamic sampling (Figure 5). 
+
+3.2 Training Objective: Variance-Reduced Random Masking 
+
+After rollouts are collected, SLIM-RL does not reconstruct the token-level decoding order. The intrinsic weakness of random masking for RL is a high-variance policy gradient. The first source of variance is the granularity of the importance ratio. A token-level ratio attaches a response-level advantage to many independently clipped per-position ratios. As argued by GSPO (Zheng et al., 2025), such token-level importance weights introduce high-variance training noise that can accumulate with response length. We therefore use a sequence-level ratio, which is computed for the whole response at a given masking level. For a masking level t, let eyj(t) be a randomly masked version of yj, let Uj(t) denote its masked positions, and let Mj(t) = |U j(t)|. The normalized sequence denoising log-score is 
+
+ℓj 
+
+> θ
+
+(t) = 1
+
+Mj(t) ∑ 
+
+> i∈U j(t)
+
+log pθ
+
+
+
+yij | x, eyj(t)
+
+
+
+, (6) where yij is the clean token at masked position i.The corresponding sequence-level denoising ratio is the geometric mean of the per-position denoising ratios over the masked positions, 
+
+ρ(t) 
+
+> j
+
+(θ) = exp 
+
+
+
+ℓj 
+
+> θ
+
+(t) − ℓj 
+
+> θold
+
+(t)
+
+
+
+= exp 
+
+ 1
+
+Mj(t) ∑ 
+
+> i∈U j(t)
+
+log pθ (yij | x, eyj(t)) 
+
+pθold (yij | x, eyj(t)) 
+
+ . (7) 
+
+3.3 Deterministic Quadrature and Unnormalized Advantage 
+
+The second source of variance is the masking level t, over which the random masking objective is an expectation. Prior dLLM-RL estimates this expectation stochastically, drawing 
+
+t at random for each update (Gong et al., 2025; Yang et al., 2026), and Rojas et al. (2025) show that this random time is the dominant source of the estimator’s variance. We instead evaluate the expectation deterministically with Gauss–Legendre quadrature over (0, 1 ). At 
+
+Q-point nodes and weights {(tq, ωq)}Qq=1, ρ(tq ) 
+
+> j
+
+(θ) is the ratio of Eq. 7 at t=tq, which removes the variance of the random t. We also use the unnormalized advantage to remove bias (Liu et al., 2025), and let Aj denote the response-level advantage assigned to yj.
+
+Aj = rj − 1
+
+G
+
+> G
+
+# ∑
+
+> i=1
+
+ri. (8) 
+
+Final objective. The final objective combines the per-quadrature-node sequence ratios 
+
+ρ(tq ) 
+
+> j
+
+(θ), the unnormalized advantage Aj of Eq. 8, and a KL regularizer toward the old policy. 5Preprint. Under review. 
+
+JSLIM (θ) = E
+
+"
+
+1
+
+G
+
+> G
+
+# ∑
+
+> j=1
+> Q
+
+# ∑
+
+> q=1
+
+ωq ψϵ
+
+
+
+ρ(tq ) 
+
+> j
+
+(θ), Aj
+
+
+
+− β DKL 
+
+ πθ ∥ πθold 
+
+#
+
+. (9) We define the clipped policy objective term as ψϵ(ρ, A) = min (ρA, clip (ρ, 1 − ϵ, 1 + ϵ)A).Algorithm 1 details the training pipeline, from risk-budgeted rollout collection to the quadrature-based policy update. 
+
+3.4 Monotonically Decreasing Per-Block Masking Schedule 
+
+Vanilla random-masking RL masks each position independently. We instead apply a mono-tonically decreasing per-block schedule p1 ≥ p2 ≥ · · · ≥ pB across the B blocks Y1, . . . , YB
+
+of a response, masking block Yb at rate pb. Under the block-causal factorization of Eq. (2) the earliest block conditions every later block, so masking it most concentrates the learning signal on the positions the rest of the response depends on, while later blocks stay progres-sively less masked. The per-block rates average to the global masking level t ( 1 
+
+> B
+
+∑b pb = t)and the explicit cosine form is given in Appendix B.1. It reaches 32.91 on MATH500 against 27.00 for uniform masking (Table 2). 
+
+## 4 Experiments 
+
+4.1 Setup Data, models, and training. Our base model is the block-wise dLLM SDAR-4B-Chat (Cheng et al., 2026) with block size 16 and block size 4, SDAR-1.7B-Chat is at block size 4. Following Wang et al. (2025b) we train on the MATH set (Hendrycks et al., 2021) (level 3–5) and PrimeIntellect-verified coding problems (Jaghouar et al., 2024), keeping a separate model per task. On SDAR-4B-Chat this runs for 160 steps at block size 16 and 100 steps at block size 4, and the SDAR-1.7B-Chat model at block size 4 trains to convergence. The code model continues from the 4B math model at block size 4 and also trains to convergence. Each RL step samples 128 prompts with G=8 responses each at temperature 1.0. We use 
+
+Q=3 Gauss–Legendre nodes per step, AdamW at constant learning rate 1 ×10 −6, clip ϵ=0.1 (the range [1−0.1, 1 +0.1 ]), and KL coefficient β=0.01 ( k3 estimator), on 8 ×A100 (40 GB) GPUs across two nodes of four (full configuration in Appendix B, Table 7, and the evaluation details in Appendix A.5). 
+
+Evaluation. We evaluate on two math benchmarks, MATH500 (Hendrycks et al., 2021) and GSM8K (Cobbe et al., 2021), and two code benchmarks, MBPP (Austin et al., 2021b) and HumanEval (Chen et al., 2021). Generation uses length 256, temperature 1.0, and the two decoders, dynamic sampling and τ-budget at both block size 16 and block size 4. We compare against an autoregressive reference, Qwen2.5-7B-Instruct (Qwen et al., 2025); the full-attention dLLMs LLaDA-8B-Instruct (Nie et al., 2026) and Dream-7B-Instruct (Ye et al., 2025); and two RL baselines, random-masking and TraceRL. 
+
+4.2 Main Results SLIM-RL substantially outperforms the RL baselines on math. On the SDAR-4B-Chat base at block size 16, SLIM-RL reaches 31.36 on MATH500 and 71.04 on GSM8K under dynamic sampling, and 32.91 and 75.03 under τ-budget, well above TraceRL at 25.04 and 59.99 and random-masking RL, which barely moves off the base at 12.82 and 47.71. At block size 4 it stays ahead of TraceRL on both math sets under dynamic sampling, and the 4B model surpasses the larger LLaDA-8B and Dream-7B diffusion models, exceeding LLaDA-8B by 10.76% on MATH500 while remaining below the autoregressive Qwen2.5-7B (Table 1). The advantage also carries to a smaller model, where on SDAR-1.7B at block size 4, SLIM-RL again outperforms TraceRL on MATH500 (36.71 vs. 35.29 under dynamic sampling) and matches it on GSM8K, with cross-scale data-efficiency reported in Section 4.5. 6Preprint. Under review.                                                                                                                                
+
+> MATH500 GSM8K MBPP HumanEval Method dynamic τdynamic τdynamic τdynamic τ
+> Reference models
+> Qwen2.5-7B-Instruct (Qwen et al., 2025) 49.67 90.65 61.07 78.66 LLaDA-8B-Instruct (Nie et al., 2026) 36.33 37.40 82.34 82.59 37.56 37.47 40.85 41.67 Dream-7B-Instruct (Ye et al., 2025) 33.40 33.47 55.52 54.41 36.93 37.33 35.57 36.18
+> From SDAR-4B-Chat, block size 16 (math RL)
+> SDAR-4B-Chat (Cheng et al., 2026) 12.18 12.07 43.54 45.14 38.80 40.56 54.48 56.49
+> + Random-masking RL (Zhao et al., 2026) 12.82 13.36 47.71 48.14 38.69 40.07 55.22 55.76 + TraceRL (Wang et al., 2025b) 25.04 26.09 59.99 64.19 35.96 36.96 44.65 48.78 + Ours 31.36 32.91 71.04 75.03 38.84 39.20 53.39 53.32
+> From SDAR-4B-Chat, block size 4 (math RL, then code RL continued from math)
+> SDAR-4B-Chat (base) 10.73 10.47 62.62 62.09 50.96 51.29 66.89 66.40 + TraceRL (math RL) 46.76 46.40 88.07 88.32 50.71 50.64 67.89 67.01 + Ours (math RL) 47.09 46.02 88.30 87.87 51.09 49.93 68.77 67.48 + TraceRL (code RL) 46.58 45.89 88.11 88.59 50.22 50.76 68.50 67.41 + Ours (code RL) 46.91 47.40 88.16 88.08 54.42 55.73 72.15 73.78
+> From SDAR-1.7B-Chat, block size 4 (math RL)
+> SDAR-1.7B-Chat (base) 11.40 11.40 61.08 62.12 39.04 39.60 51.02 50.75 + TraceRL (math RL) 35.29 35.78 76.35 76.50 40.22 40.96 50.47 50.20 + Ours (math RL) 36.71 36.47 76.50 77.48 40.64 41.09 50.88 53.73
+
+Table 1: Main results (accuracy, %). For each benchmark the paired sub-columns dynamic and τ are two test-time decoders applied to every row: dynamic sampling and our τ-budget decoder. Ours = SLIM-RL, which collects its training rollouts with the τ-budget decoder; the dynamic and τ columns are test-time choices, independent of the rollout decoder. Upper group: block size 16 (math RL); lower groups: block size 4 (math RL, then code RL continued from math). 
+
+SLIM-RL also outperforms TraceRL on code. Under code RL trained from the block size 4 math model, SLIM-RL improves over TraceRL by 4.20% on MBPP and 3.65% on HumanEval under dynamic sampling, while preserving math accuracy. Block size 4 parallelism (tokens-per-forward, TPF) and the decode-time block-size change are reported in Appendix A.3. 
+
+4.3 Ablation Study 
+
+Each component contributes as a leave-one-out drop from the full recipe on SDAR-4B-Chat at block size 16, measured on MATH500 under the τ-budget decoder where the full recipe peaks at 32.91 (Table 2). The largest drop is the quadrature, where using two Gauss– Legendre quadrature nodes instead of three lowers it to 26.56. Generating the rollouts with dynamic sampling instead of τ-budget lowers accuracy to 27.09. The sequence-level importance ratio attains the full-recipe 32.91, whereas a token-level ratio degrades it to 28.09. Replacing the monotonically decreasing per-block schedule with uniform random masking lowers accuracy to 27.00. The τ-budget rollout’s benefit does not transfer to TraceRL. Trained on τ-budget rollouts, TraceRL reaches only 22.91 on MATH500, below the 26.09 of its usual dynamic sampling rollouts, so the gain is specific to trace-free random masking. 
+
+4.4 Scaling Block Size 
+
+SLIM-RL’s advantage over TraceRL grows with the block size. With both methods trained natively at each block size (Table 3), the two are on par at block size 4, where TraceRL keeps the exact ( s=1) trajectory at low slicing cost and SLIM-RL matches it on math to within 0.33% on MATH500 and 0.23% on GSM8K under matched decoding. At block size 16 the math margin widens to 6.32% and 11.05%. The same widening shows on code benchmarks. TraceRL loses code ability at block size 16, its MBPP falling to 35.96 and HumanEval to 44.65 from the base’s 38.80 and 54.48, while SLIM-RL holds near the base at 38.84 and 53.39 (Table 1). Random-masking RL improves far less than TraceRL and SLIM-RL on math at every block size, while on code it stays near the base. 7Preprint. Under review. 
+
+4.5 Training Efficiency: Trace-Free Optimization Avoids Trajectory Slicing Trace-free optimization attains TraceRL’s accuracy at a constant per-rollout cost. On SDAR-4B the baseline produces 3.55 samples per response at block size 16 ( s=4) and 4.00 at block size 4 ( s=1), both higher than our constant Q=3; the full trajectory ( s=1) at block size 16 instead costs 12.92, with 18.5% of responses reaching the full 16 samples. 1 At block size 16, plain random-masking RL is near the base model while SLIM-RL overtakes TraceRL, reaching its best MATH500 accuracy on only 0.46 × the training data (Table 6, Figure 2). At block size 4 and 1.7B, it reaches TraceRL’s best on 0.81 × and 0.76 × the data, and uses less total data at every scale, 0.85 ×, 0.70 ×, and 0.74 ×. At block size 4 the baseline keeps the full trajectory and both methods are near their best accuracy, where SLIM-RL still stays slightly ahead. 
+
+SLIM-RL also trains to a more parallel model. Beyond accuracy, SLIM-RL commits more tokens-per-forward than TraceRL at matched decoding. At block size 4 it reaches TPF 1.94 vs. 1.72 on MATH500 under dynamic sampling and leads on every benchmark (Table 5), and at block size 16 it sustains the higher TPF throughout training (Figure 4). Because the decoder is fixed, this TPF gain comes from the trained model, not from the τ-budget rule, which at m=1 slightly lowers TPF in exchange for accuracy. The other panels of Figure 4 report the training dynamics, where generation length shortens for all methods, and the mask ratio for Random-masking and ours stays near 0.5 while TraceRL’s stays near 0.25. 
+
+The τ-budget decoder transfers across architectures. Because it reads only per-position confidences, the τ-budget decoder transfers training-free across LLaDA, Dream, and SDAR, a drop-in replacement for dynamic sampling (Table 4). On the same model its more conser-vative commits trade a little throughput for accuracy, leaving tokens-per-forward just below dynamic sampling. Dream-7B is the exception, where τ-budget instead raises tokens-per-forward above dynamic sampling on every benchmark except GSM8K, so it is faster while its code accuracy also rises. 
+
+## 5 Related Work 
+
+Reinforcement learning for dLLMs. Existing RL for dLLMs either reconstructs the decod-ing trajectory or trains on randomly masked corruptions of the completed response. On the trajectory side, TraceRL (Wang et al., 2025b) optimizes the objective on the exact decoding trace, DCoLT (Huang et al., 2026) rewards the full denoising trajectory through outcome-based RL, and d2 (Wang et al., 2026) estimates the likelihood of the decoding trajectory. The masking view instead discards the decoding order, with d1 (Zhao et al., 2026) factorizing the policy through a mean-field decomposition, DiffuCoder’s coupled-GRPO (Gong et al., 2025) pairing complementary masking realizations, and MMaDA’s UniGRPO (Yang et al., 2026) adapting GRPO to masked diffusion. Closest to our objective, Rojas et al. (2025) replace the random masking level with Gaussian quadrature on the diffusion ELBO, and ESPO (Ou et al., 2025) reduces the ratio to a single sequence-level weight per response. SLIM-RL stays on the random-masking side and controls its gradient variance by recombining existing components, a sequence-level length-normalized ratio (Zheng et al., 2025), deterministic quadrature over the masking level (Rojas et al., 2025), and an unnormalized advantage (Liu et al., 2025). Both act on the training objective alone, whereas SLIM-RL pairs it with the 
+
+τ-budget rollout decoder and the mean-preserving per-block mask schedule, controlling rollout commit risk together with optimization variance. 
+
+Diffusion language models. Diffusion language models (Austin et al., 2021a; Gong et al., 2022; Li et al., 2022) differ in architecture and in how they commit tokens at inference. Full-attention dLLMs (LLaDA (Nie et al., 2026; Bie et al., 2025), Dream (Ye et al., 2025), MMaDA (Yang et al., 2026)) scale iterative denoising to the 7–8B range but cannot natively reuse KV caches across denoising steps. Block-wise hybrids (Block Diffusion (Arriola et al., 2025), SDAR (Cheng et al., 2026)) generate autoregressively across blocks while denoising 
+
+> 1Measured over two passes of MATH500 (1000 responses) under the exact TraceRL slicing.
+
+8Preprint. Under review. the active block in parallel, restoring KV-cache reuse and serving as the substrate for recent dLLM RL (Wang et al., 2025b; Hu et al., 2026; Zhu et al., 2025b). A separate line accelerates inference by adaptively committing tokens at each denoising step. Fast-dLLM (Wu et al., 2025) and Dimple (Yu et al., 2025) commit every position whose confidence exceeds a threshold (dynamic sampling), D2F (Wang et al., 2025a) adds discrete diffusion forcing for faster-than-autoregressive inference, and S2D2 (Han et al., 2026) adds training-free self-speculation. Dynamic sampling bounds only per-position confidence, so the wrong-commit risk of a step grows with the number of positions committed. The τ-budget decoder (Section 3.1) instead bounds the cumulative step-level risk directly in a single pass. 
+
+## 6 Conclusion 
+
+We asked whether reconstructing the exact decoding trajectory is necessary to match TraceRL at equal training cost in diffusion language models, and found that it is not. SLIM-RL is trace-free, pairing a τ-budget rollout decoder that caps a confidence-based proxy for step-level commit risk with a variance-reduced random-masking objective built from sequence-level ratios, deterministic quadrature, and a decreasing per-block mask schedule. On block-causal SDAR-4B, this recipe outperforms TraceRL on both math and code, reaching its best accuracy on 0.46 × the training data. Whether exact trajectory reconstruction remains worthwhile at larger blocks or longer responses is left to future work. 
+
+## References 
+
+Marianne Arriola, Aaron Gokaslan, Justin Chiu, Zhihan Yang, Zhixuan Qi, Jiaqi Han, Sub-ham Sahoo, and Volodymyr Kuleshov. Block diffusion: Interpolating between autoregres-sive and diffusion language models. In International Conference on Learning Representations ,volume 2025, pp. 50726–50753, 2025. Jacob Austin, Daniel D Johnson, Jonathan Ho, Daniel Tarlow, and Rianne Van Den Berg. Structured denoising diffusion models in discrete state-spaces. Advances in neural informa-tion processing systems , 34:17981–17993, 2021a. Jacob Austin, Augustus Odena, Maxwell Nye, Maarten Bosma, Henryk Michalewski, David Dohan, Ellen Jiang, Carrie Cai, Michael Terry, Quoc Le, et al. Program synthesis with large language models. arXiv preprint arXiv:2108.07732 , 2021b. Tiwei Bie, Maosong Cao, Kun Chen, Lun Du, Mingliang Gong, Zhuochen Gong, Yanmei Gu, Jiaqi Hu, Zenan Huang, Zhenzhong Lan, Chengxi Li, Chongxuan Li, Jianguo Li, Zehuan Li, Huabin Liu, Lin Liu, Guoshan Lu, Xiaocheng Lu, Yuxin Ma, Jianfeng Tan, Lanning Wei, Ji-Rong Wen, Yipeng Xing, Xiaolu Zhang, Junbo Zhao, Da Zheng, Jun Zhou, Junlin Zhou, Zhanchao Zhou, Liwang Zhu, and Yihong Zhuang. Llada2.0: Scaling up diffusion language models to 100b, 2025. URL https://arxiv.org/abs/2512.15745 .Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, Henrique Ponde De Oliveira Pinto, Jared Kaplan, Harri Edwards, Yuri Burda, Nicholas Joseph, Greg Brockman, et al. Evalu-ating large language models trained on code. arXiv preprint arXiv:2107.03374 , 2021. Shuang Cheng, Yihan Bian, Dawei Liu, Yuhua Jiang, Yihao Liu, Linfeng Zhang, Qian Yao, Zhongbo Tian, Wenhai Wang, Qipeng Guo, et al. Sdar: A synergistic diffusion-autoregression paradigm for scalable sequence generation. In Findings of the Association for Computational Linguistics: ACL 2026 , pp. 22058–22075, 2026. Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano, et al. Training verifiers to solve math word problems. arXiv preprint arXiv:2110.14168 , 2021. Shansan Gong, Mukai Li, Jiangtao Feng, Zhiyong Wu, and LingPeng Kong. Diffuseq: Se-quence to sequence text generation with diffusion models. arXiv preprint arXiv:2210.08933 ,2022. 9Preprint. Under review. Shansan Gong, Ruixiang Zhang, Huangjie Zheng, Jiatao Gu, Navdeep Jaitly, Lingpeng Kong, and Yizhe Zhang. Diffucoder: Understanding and improving masked diffusion models for code generation. arXiv preprint arXiv:2506.20639 , 2025. Ligong Han, Hao Wang, Han Gao, Kai Xu, and Akash Srivastava. S2d2: Fast decoding for diffusion llms via training-free self-speculation. arXiv preprint arXiv:2603.25702 , 2026. Haoyu He, Katrin Renz, Yong Cao, and Andreas Geiger. Mdpo: Overcoming the training-inference divide of masked diffusion language models. arXiv preprint arXiv:2508.13148 ,2025. Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn Song, and Jacob Steinhardt. Measuring mathematical problem solving with the math dataset. arXiv preprint arXiv:2103.03874 , 2021. Yanzhe Hu, Yijie Jin, Pengfei Liu, Kai Yu, and Zhijie Deng. Lightningrl: Breaking the accuracy-parallelism trade-off of block-wise dllms via reinforcement learning. arXiv preprint arXiv:2603.13319 , 2026. Zemin Huang, Zhiyang Chen, Zijun Wang, Tiancheng Li, and Guo-Jun Qi. Reinforcing the diffusion chain of lateral thought with diffusion language models. Advances in Neural Information Processing Systems , 38:152677–152710, 2026. Sami Jaghouar, Jack Min Ong, Manveer Basra, Fares Obeid, Jannik Straube, Michael Keib-linger, Elie Bakouch, Lucas Atkins, Maziyar Panahi, Charles Goddard, Max Ryabinin, and Johannes Hagemann. Intellect-1 technical report, 2024. URL https://arxiv.org/abs/ 2412.01152 .Xiang Li, John Thickstun, Ishaan Gulrajani, Percy S Liang, and Tatsunori B Hashimoto. Diffusion-lm improves controllable text generation. Advances in neural information process-ing systems , 35:4328–4343, 2022. Jiawei Liu, Xiting Wang, Yuanyuan Zhong, Defu Lian, and Yu Yang. Efficient and stable reinforcement learning for diffusion language models. arXiv preprint arXiv:2602.08905 ,2026. Zichen Liu, Changyu Chen, Wenjun Li, Penghui Qi, Tianyu Pang, Chao Du, Wee Sun Lee, and Min Lin. Understanding r1-zero-like training: A critical perspective. arXiv preprint arXiv:2503.20783 , 2025. Shen Nie, Fengqi Zhu, Zebin You, Xiaolu Zhang, Jingyang Ou, Jun Hu, Jun Zhou, Yankai Lin, Ji-Rong Wen, and Chongxuan Li. Large language diffusion models. Advances in Neural Information Processing Systems , 38:50608–50646, 2026. Jingyang Ou, Jiaqi Han, Minkai Xu, Shaoxuan Xu, Jianwen Xie, Stefano Ermon, Yi Wu, and Chongxuan Li. Principled rl for diffusion llms emerges from a sequence-level perspective. 
+
+arXiv preprint arXiv:2512.03759 , 2025. Qwen, :, An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan Li, Dayiheng Liu, Fei Huang, Haoran Wei, Huan Lin, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang, Jingren Zhou, Junyang Lin, Kai Dang, Keming Lu, Keqin Bao, Kexin Yang, Le Yu, Mei Li, Mingfeng Xue, Pei Zhang, Qin Zhu, Rui Men, Runji Lin, Tianhao Li, Tianyi Tang, Tingyu Xia, Xingzhang Ren, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yu Wan, Yuqiong Liu, Zeyu Cui, Zhenru Zhang, and Zihan Qiu. Qwen2.5 technical report, 2025. URL https://arxiv.org/abs/2412.15115 .Kevin Rojas, Jiahe Lin, Kashif Rasul, Anderson Schneider, Yuriy Nevmyvaka, Molei Tao, and Wei Deng. Improving reasoning for diffusion language models via group diffusion policy optimization. arXiv preprint arXiv:2510.08554 , 2025. Subham S Sahoo, Marianne Arriola, Yair Schiff, Aaron Gokaslan, Edgar Marroquin, Justin T Chiu, Alexander Rush, and Volodymyr Kuleshov. Simple and effective masked diffusion language models. Advances in Neural Information Processing Systems , 37:130136–130184, 2024. 10 Preprint. Under review. Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathe-matical reasoning in open language models. arXiv preprint arXiv:2402.03300 , 2024. Xiaohang Tang, Rares Dolga, Sangwoong Yoon, and Ilija Bogunovic. wd1: Weighted policy optimization for reasoning in diffusion language models, 2026. URL https://arxiv.org/ abs/2507.08838 .Guanghan Wang, Gilad Turok, Yair Schiff, Marianne Arriola, and Volodymyr Kuleshov. d2: Improving reasoning in diffusion language models via trajectory likelihood estimation, 2026. URL https://arxiv.org/abs/2509.21474 .Xu Wang, Chenkai Xu, Yijie Jin, Jiachun Jin, Hao Zhang, and Zhijie Deng. Diffusion llms can do faster-than-ar inference via discrete diffusion forcing. arXiv preprint arXiv:2508.09192 ,2025a. Yinjie Wang, Ling Yang, Bowen Li, Ye Tian, Ke Shen, and Mengdi Wang. Revolutionizing reinforcement learning framework for diffusion large language models. arXiv preprint arXiv:2509.06949 , 2025b. Chengyue Wu, Hao Zhang, Shuchen Xue, Zhijian Liu, Shizhe Diao, Ligeng Zhu, Ping Luo, Song Han, and Enze Xie. Fast-dllm: Training-free acceleration of diffusion llm by enabling kv cache and parallel decoding. arXiv preprint arXiv:2505.22618 , 2025. Ling Yang, Ye Tian, Bowen Li, Xinchen Zhang, Ke Shen, Yunhai Tong, and Mengdi Wang. Mmada: Multimodal large diffusion language models. Advances in Neural Information Processing Systems , 38:138867–138907, 2026. Jiacheng Ye, Zhihui Xie, Lin Zheng, Jiahui Gao, Zirui Wu, Xin Jiang, Zhenguo Li, and Ling-peng Kong. Dream 7b: Diffusion large language models. arXiv preprint arXiv:2508.15487 ,2025. Runpeng Yu, Xinyin Ma, and Xinchao Wang. Dimple: Discrete diffusion multimodal large language model with parallel decoding. arXiv preprint arXiv:2505.16990 , 2025. Siyan Zhao, Devaansh Gupta, Qinqing Zheng, and Aditya Grover. d1: Scaling reasoning in diffusion large language models via reinforcement learning. Advances in Neural Information Processing Systems , 38:56729–56762, 2026. Chujie Zheng, Shixuan Liu, Mingze Li, Xiong-Hui Chen, Bowen Yu, Chang Gao, Kai Dang, Yuqiong Liu, Rui Men, An Yang, et al. Group sequence policy optimization. arXiv preprint arXiv:2507.18071 , 2025. Fengqi Zhu, Rongzhen Wang, Shen Nie, Xiaolu Zhang, Chunwei Wu, Jun Hu, Jun Zhou, Jianfei Chen, Yankai Lin, Ji-Rong Wen, and Chongxuan Li. Llada 1.5: Variance-reduced preference optimization for large language diffusion models, 2025a. URL https://arxiv. org/abs/2505.19223 .Ying Zhu, Jiaxin Wan, Xiaoran Liu, Siyang He, Qiqi Wang, Xu Guo, Tianyi Liang, Zengfeng Huang, Ziwei He, and Xipeng Qiu. Dirl: An efficient post-training framework for diffusion language models. arXiv preprint arXiv:2512.22234 , 2025b. 
+
+## A Additional Experimental Results 
+
+This appendix collects the parallelism/TPF, cross-architecture, block size 4, code-RL, cross-scale, and training-dynamics results referenced from the main text. All numbers are at response length 256. 
+
+A.1 Ablation and Block-Size Tables 
+
+These tables support the analysis in Sections 4.3–4.4: Table 2 gives the leave-one-out com-ponent ablations and Table 3 reports the block-size dependence of the advantage over TraceRL. 11 Preprint. Under review.   
+
+> MATH500 Full recipe 32.91
+> Importance-ratio granularity
+> sequence-level (adopted,
+
+= full) 32.91  
+
+> token-level 28.09
+> Rollout decoder
+> τ-budget (
+
+= full) 32.91  
+
+> dynamic 27.09
+> Per-block mask schedule
+> monotonic (
+
+= full) 32.91  
+
+> random masking 27.00
+> Quadrature points Q Q
+
+=3 ( = full) 32.91 
+
+> Q
+
+=2 26.56   
+
+> Rollout decoder on TraceRL
+> dynamic 26.09
+> τ-budget 22.91
+
+Table 2: Leave-one-out ablations of SLIM-RL on MATH500 and ablation to TraceRL.                      
+
+> MATH500 GSM8K Block size Random TraceRL Ours Random TraceRL Ours block size 16 12.82 25.04 31.36 47.71 59.99 71.04 block size 4 15.36 46.76 47.09 71.75 88.07 88.30
+> ∆at block size 16
+
++6.32 +11.05   
+
+> ∆at block size 4
+
++0.33 +0.23 
+
+Table 3: Block-size dependence of SLIM-RL’s advantage over TraceRL (dynamic sampling); block size 4 uses models trained natively at block size 4. 
+
+A.2 Cross-Architecture Decoder Transfer and Parallelism 
+
+Because τ-budget depends only on per-position confidences, it applies unchanged to full-attention (LLaDA, Dream) and block-causal (SDAR) diffusion models as a training-free, drop-in replacement for dynamic sampling (Table 4). Full SLIM-RL is excluded because it already trains with τ-budget, so we include its dynamic-sampling-trained ablation in its place. On parallelism, at the conservative budget m=1 the τ-budget tokens-per-forward is uniformly slightly below dynamic sampling across LLaDA and every SDAR model in Table 4, the small throughput cost it pays for its accuracy gains, so we report it as an accuracy decoder rather than a speed one. Dream-7B at block size 4 is the one architecture where 
+
+τ-budget speeds up TPF on MATH500, MBPP, and HumanEval, with only GSM8K nearly the same at 2.61 versus 2.60; on the two code sets accuracy rises in step, MBPP from 36.93 to 37.33 at TPF 4.45 to 4.59 and HumanEval from 35.57 to 36.18 at TPF 5.46 to 5.72. For Dream the decoder is both faster and more accurate on code, while on MATH500 accuracy is nearly unchanged and on GSM8K it drops slightly. 
+
+A.3 Block Size 4 and Code RL 
+
+Table 5 reports the full block size 4 results: the two methods reach comparable accuracy, with SLIM-RL slightly ahead, and replacing dynamic sampling with τ-budget decoding leaves accuracy nearly unchanged. The code-RL results, with code RL continued from the block size 4 math-RL model, are reported in the main-text Table 1 (lower group). 12 Preprint. Under review. Table 4: Training-free τ-budget decoding across architectures.                                                                                                                                                                                       
+
+> MATH500 GSM8K MBPP HumanEval Model / ckpt Decoder Kacc TPF acc TPF acc TPF acc TPF
+> Full-attention dLLMs
+> LLaDA-8B-Instruct dynamic 32 36.33 4.07 82.34 3.20 37.56 6.34 40.85 5.08
+> τ-budget 32 37.40 3.79 82.59 2.86 37.47 5.69 41.67 4.66 Dream-7B-Instruct dynamic 433.40 2.19 55.52 2.61 36.93 4.45 35.57 5.46
+> τ-budget 433.47 2.21 54.41 2.60 37.33 4.59 36.18 5.72
+> Block-causal SDAR-4B
+> SDAR-4B-Chat (base) dynamic 16 12.18 2.07 43.54 1.98 38.80 1.60 54.48 1.75
+> τ-budget 16 12.07 1.95 45.14 1.87 40.56 1.47 56.49 1.60 dynamic 410.73 2.09 62.62 1.92 50.96 1.55 66.89 1.68
+> τ-budget 410.47 2.03 62.09 1.85 51.29 1.48 66.40 1.59 + Random-masking RL dynamic 16 12.82 2.09 47.71 2.08 38.69 1.61 55.22 1.76
+> τ-budget 16 13.36 1.97 48.14 1.94 40.07 1.48 55.76 1.64 + TraceRL dynamic 16 25.04 1.80 59.99 2.05 35.96 1.61 44.65 1.76
+> τ-budget 16 26.09 1.71 64.19 1.93 36.96 1.49 48.78 1.63 dynamic 446.76 1.72 88.07 2.02 50.71 1.50 67.89 1.64
+> τ-budget 446.40 1.66 88.32 1.95 50.64 1.42 67.01 1.56 + SLIM-RL (w/o τ)dynamic 16 26.29 1.97 67.73 2.30 37.56 1.66 52.91 1.90
+> τ-budget 16 27.09 1.85 70.38 2.13 38.80 1.53 54.81 1.73 dynamic 447.22 1.95 88.07 2.08 51.18 1.56 68.70 1.73
+> τ-budget 446.84 1.85 88.07 2.01 50.78 1.49 68.09 1.64
+
+Table 5: Native block size 4 evaluation of the SDAR-4B family (both methods trained and decoded at block size 4).                                                    
+
+> MATH500 GSM8K MBPP HumanEval Method Decoder Kacc TPF acc TPF acc TPF acc TPF SLIM-RL (ours) dynamic 447.09 1.94 88.30 2.13 51.09 1.56 68.77 1.72
+> τ-budget 446.02 1.87 87.87 2.06 49.93 1.49 67.48 1.65 TraceRL (baseline) dynamic 446.76 1.72 88.07 2.02 50.71 1.50 67.89 1.64
+> τ-budget 446.40 1.66 88.32 1.95 50.64 1.42 67.01 1.56
+
+A.4 Training Dynamics and Cross-Scale 
+
+At 1.7B scale (Figure 3, Table 6), SLIM-RL stays ahead of TraceRL on MATH500 (36.71 vs. 35.29) and reaches TraceRL’s best accuracy on 0.76 × the training data, a data-efficiency gain that holds at a second model scale. Figure 4 shows training dynamics: SLIM-RL maintains a stable tokens-per-forward while TraceRL’s declines, so SLIM-RL ends higher, and generation length shortens for all methods. 
+
+A.5 Evaluation Details 
+
+We report the average accuracy over n sampled responses per task. For the SDAR family we set n=9 on MATH500, n=3 on GSM8K, and n=9 on both MBPP and HumanEval. A coding response counts as correct only when it passes every functional test. Each diffusion model is evaluated under both decoders, dynamic sampling and the τ-budget decoder of Section 3.1. For the SDAR-4B-Chat and SDAR-1.7B-Chat models, we keep the pretrained block-diffusion decoding, a response length of 256, temperature 1.0, top-p=1.0, and top-k=0. Dynamic sampling unmasks every position above the confidence threshold τ=0.9, and the τ-budget decoder reuses that τ with budget multiplier m=1. The 4B models are evaluated at block size 16 and block size 4, and the 1.7B model at block size 4. For the full-attention baselines, we use temperature 0.1 and sample n=3 responses per task across all four benchmarks. LLaDA-8B-Instruct decodes at block size 32 and Dream-13 Preprint. Under review. 0 20 40 60 80 100 
+
+> Cumulative training samples (×10 3)
+> 15
+> 20
+> 25
+> 30
+> MATH500 accuracy (%)
+> 0.46 × data
+> to reach TraceRL's best
+> Block size 16
+> Random masking
+> TraceRL
+> SLIM-RL (ours)
+
+Figure 2: MATH500 accuracy versus cumulative training samples at block size 16. Random masking (gray) is near the base model; SLIM-RL (blue) overtakes TraceRL (red), reaching TraceRL’s best accuracy on 0.46 × the training samples.  
+
+> Setting Data to reach (
+
+×) Total-run data ( ×)TraceRL (baseline) 1.00 1.00 SLIM-RL, SDAR-4B block 16 0.46 0.85 SLIM-RL, SDAR-4B block 4 0.81 0.70   
+
+> SLIM-RL, SDAR-1.7B block 4 0.76 0.74
+
+Table 6: Training cost of SLIM-RL relative to the TraceRL baseline (TraceRL = 1.00 ×; < 1is cheaper). SLIM-RL needs less data to reach TraceRL’s best MATH500 accuracy, and less total-run data, at every scale. 7B-Instruct at block size 4, both over a length-256 response. Both baselines run dynamic sampling and the τ-budget decoder at threshold τ=0.95 with m=1. Qwen2.5-7B-Instruct is the autoregressive reference. We sample n=3 responses at tempera-ture 0.1, and raise the generation length to 512. 
+
+## B Algorithm Pipeline 
+
+Algorithm 1 details the SLIM-RL training loop. Each outer step samples G rollouts via 
+
+τ-budget dynamic unmasking (Algorithm 2), scores them with a verifiable reward r(·),forms the unnormalized advantage Aj (Eq. 8), evaluates the sequence-level ratio ρ(tq ) 
+
+> j
+
+(θ)
+
+(Eq. 7) at Q Gauss–Legendre quadrature nodes per response, and updates θ on the clipped objective (Eq. 9). 14 Preprint. Under review. 0 20 40 60 80 100 
+
+> Cumulative training samples (×10 3)
+> 5
+> 10
+> 15
+> 20
+> 25
+> 30
+> Training accuracy (MATH, %)
+
+SDAR-1.7B, block size 4 
+
+> TraceRL
+> SLIM-RL
+
+Figure 3: Cross-scale training dynamics at 1.7B and block size 4. SLIM-RL (blue) overtakes TraceRL (red) on training accuracy over cumulative data, reaching TraceRL’s best MATH500 accuracy on 0.76 × the training samples (Table 6). 0 50 100 150       
+
+> Training step
+> 1.8
+> 1.9
+> 2.0
+> 2.1
+> Tokens per forward (TPF)
+> TraceRL
+> SLIM-RL
+> Random
+> 050 100 150
+> Training step
+> 180
+> 190
+> 200
+> 210
+> 220
+> 230
+> 240
+> Avg. generation length
+> 050 100 150
+> Training step
+> 0.25
+> 0.30
+> 0.35
+> 0.40
+> 0.45
+> 0.50
+> Mask ratio
+
+Figure 4: Training dynamics at block size 16. Left. SLIM-RL maintains a stable tokens-per-forward (TPF) while TraceRL’s declines, so SLIM-RL ends higher. Middle. Generation length shortens over training for all methods. Right. Mask ratio: SLIM-RL and random masking hold near 0.5 while TraceRL stays near 0.25. 
+
+B.1 Per-Block Mask Schedule 
+
+The monotonically decreasing per-block schedule (Section 3.4) is a cosine schedule centered at the masking level t:
+
+pb = t + δ 
+
+> 2
+
+cos (πξ b), ξb = b − 1
+
+B − 1 , (10) where ξb is the normalized position of block b among the B blocks of a response. The rate decreases from t + δ 
+
+> 2
+
+at the first block to t − δ 
+
+> 2
+
+at the last. Since cos (πξ b) is antisymmetric about ξb = 12 , the per-block rates average to t exactly ( 1 
+
+> B
+
+∑b pb = t), so the schedule only reallocates a fixed expected mask count across blocks. The spread is bounded by 
+
+δ ≤ 2 min (t, 1 − t) to keep every pb ∈ [0, 1 ]; we set δ = 0.2 and apply the schedule at each Gauss–Legendre quadrature node t.15 Preprint. Under review. 0 50 100 150 
+
+Training step 
+
+0.17 
+
+0.18 
+
+0.19 
+
+0.20 
+
+0.21 
+
+0.22 
+
+0.23  
+
+> Expected wrong commits / step  SDAR-4B, block size 16
+> TraceRL (dynamic rollout)
+> Ours ( -budget rollout)
+> Random (dynamic rollout)
+
+0 20 40 60 80 100 
+
+Training step 
+
+0.14 
+
+0.16 
+
+0.18 
+
+0.20  
+
+> Expected wrong commits / step  SDAR-4B, block size 4
+> TraceRL (dynamic rollout)
+> Ours ( -budget rollout)
+
+Figure 5: Expected wrong commitments per step, ∑i(1 − pi) over committed positions. The 
+
+τ-budget rollouts (SLIM-RL, blue) commit fewer than TraceRL’s dynamic sampling rollouts, 0.17 vs. 0.22 at block size 16 and 0.15 vs. 0.21 at block size 4. 
+
+Algorithm 1 SLIM-RL Training 
+
+1: Input: 
+
+2: 1) Prompt set D; reward r(x, y); policy πθ ; old policy πθold .3: 2) Outer steps T; rollouts G; update epochs E; clip range ϵ; KL weight β; learning rate η.4: 3) Block size K; confidence threshold τ; risk-budget schedule m; quadrature nodes Q.5: Initialize θ and Gauss–Legendre nodes/weights {(tq, ωq)}Qq=1 on (0, 1 ).6: for n = 1 to T do 
+
+7: πθold ← πθ ; Dgrp ← ∅
+
+Rollout collection with risk-budgeted decoding 
+
+8: for prompt minibatch X ∼ D do 
+
+9: for all x ∈ X do 
+
+10: Sample {yj}Gj=1 by T AU BUDGET DECODE (πθold , x, K, m, τ).11: Evaluate rj ← r(x, yj) for j = 1, . . . , G.12: Compute Aj ← rj − 1 
+
+> G
+
+∑Gi=1 ri.13: Dgrp ← D grp ∪ { (x, {yj}Gj=1, {Aj}Gj=1)}.14: end for 
+
+15: end for 
+
+Policy optimization with sequence-level ratios 
+
+16: for e = 1 to E do 
+
+17: Sample minibatch G ⊂ D grp .18: Build masked corruptions eyj(tq) for all (x, yj) ∈ G and nodes q, with per-block rates from the decreasing schedule (Section 3.4). 19: Compute sequence log-scores ℓj,q 
+
+> θ
+
+and ℓj,q 
+
+> θold
+
+by Eq. 6. 20: Compute sequence ratios ρ(tq ) 
+
+> j
+
+(θ) by Eq. 7. 21: Update θ ← θ + η∇θ JSLIM (θ) using Eq. 9. 22: end for 
+
+23: end for Ensure: Trained policy πθ .
+
+16 Preprint. Under review. 
+
+Algorithm 2 TAU BUDGET DECODE (τ-Budget Dynamic Unmasking) 
+
+1: Input: 
+
+2: 1) Policy πθ ; prompt x.3: 2) Block size K; risk-budget schedule m; confidence threshold τ.4: Initialize: y ← x ∥ [MASK ]L; block index b ← 1. 5: while some block remains masked do 
+
+6: s ← 17: while block b has masked positions do 
+
+8: For masked i in block b: pi ← max v∈V pθ (yi 
+
+> 0
+
+= v | y, x).9: Candidate set As ← { i : pi > τ}. // Eq. 4 10: if As = ∅ then 
+
+11: Commit single arg max i pi to break tie; continue .12: end if 
+
+13: Uncertainties ui ← 1 − pi for i ∈ A s; sort ui1 ≤ ui2 ≤ · · · ≤ ui|A s | .14: Step budget Bs ← m(1 − τ).15: ks ← max {k : ∑kr=1 uir ≤ B s}; committed set Cs ← { i1, . . . , iks }. // Eq. 5 16: For i ∈ C s: ˆ yi ← arg max v∈V pθ (yi 
+
+> 0
+
+= v | y, x); update y.17: s ← s + 118: end while 
+
+19: b ← b + 1 // move to next block 20: end while 
+
+21: Output: decoded response y.
+
+Table 7: SLIM-RL hyperparameters for the SDAR-4B-Chat math-RL runs. 
+
+Hyperparameter Value 
+
+Rollout / τ-budget decoding 
+
+Block size K 16 Confidence threshold τ 0.90 Risk-budget schedule m 1 (constant) effective step budget Bs = m(1 − τ) 0.10 Response length L 256 Denoising steps per block 16 Sampling temperature 1.0 Nucleus / top-k top-p = 1.0, top-k = 0Tasks per step 128 Responses per task (group size G) 8
+
+Masking schedule (decreasing per block) 
+
+Quadrature nodes Q 3Quadrature rule Gauss–Legendre on (0, 1 )
+
+nodes {tq} {0.1127, 0.5, 0.8873 }
+
+weights {ωq} (sum to 1) {0.2778, 0.4444, 0.2778 }
+
+Per-block mask-rate spread δ 0.2 
+
+Optimization (SLIM-RL update) 
+
+Clip range (low / high) [1−0.1, 1 +0.1 ]
+
+KL coefficient β 0.01 KL estimator k3
+
+Optimizer AdamW Learning rate (constant) η 1×10 −6
+
+AdamW (β1, β2, wd, ε) (0.9, 0.999, 0, 1 ×10 −8)
+
+LR schedule / warmup cosine, 0 warmup, min-scale 1.0 Max gradient norm 1.0 Mixed precision bf16 (TF32 enabled) Outer RL steps T 160 Update epochs per step E 1Random seed 10086 Hardware 8×A100 40 GB, 2 nodes × 4
+
+17

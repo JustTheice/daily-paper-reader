@@ -1,0 +1,2000 @@
+Title: Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding
+
+URL Source: https://arxiv.org/pdf/2607.01775v1
+
+Published Time: Fri, 03 Jul 2026 00:47:08 GMT
+
+Number of Pages: 37
+
+Markdown Content:
+# Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+Marianne Arriola 1 Volodymyr Kuleshov 1
+
+## Abstract 
+
+Discrete diffusion models have steadily improved in quality relative to autoregressive (AR) mod-els. However, these models are normally con-strained to fixed-length generation and do not sup-port key-value (KV) caching. Block diffusion partially bridges diffusion and AR by generat-ing token blocks left-to-right, but its fixed-size sequential blocks limit decoding flexibility and parallelism. Here, we present a new class of lan-guage models, set diffusion, comprised of (i) a likelihood parameterization that factorizes over flexible-position, flexible-length token sets and (ii) a set-causal diffusion architecture that sup-ports KV cache updates after every inference step. By factorizing over token sets instead of fixed-size blocks, tokens can be decoded in arbitrarily-ordered sets, including sliding-window sets, en-abling faster inference and support for any-order decoding. Set diffusion achieves better speed-quality tradeoffs on mathematical reasoning, sum-marization, and unconditional generation com-pared to prior diffusion language models while offering stronger infilling performance than block diffusion. We provide the code 1, along with the model weights and blog post on the project page: 
+
+https://m-arriola.com/setdlms/ 
+
+## 1. Introduction 
+
+Discrete diffusion models have recently gained traction in language modeling (Austin et al., 2021; Lou et al., 2023; Sahoo et al., 2024), music synthesis (Sun et al., 2022), and biological sequence design (Schiff et al., 2025). Compared 
+
+> 1
+
+Department of Computer Science, Cornell University, Ithaca, NY, USA. Correspondence to: Marianne Arriola <mar-riola@cs.cornell.edu >.
+
+Proceedings of the 43 rd International Conference on Machine Learning , Seoul, South Korea. PMLR 306, 2026. Copyright 2026 by the author(s). 
+
+> 1
+
+Code: https://github.com/kuleshov-group/ setdlms 
+
+to autoregressive (AR) models, they offer faster generation (Wu et al., 2025; Zheng et al., 2024) and improved control-lability (Schiff et al., 2025; Li et al., 2022). However, they typically rely on architectures that preclude flexible-length generation (Kim et al., 2025a) and require full bidirectional context, which prevents key-value (KV) caching (Ma et al., 2025; Wu et al., 2025; Nguyen-Tri et al., 2025). Block diffusion (Arriola et al., 2025a) partially mitigates these challenges by modeling sequences autoregressively over contiguous left-to-right blocks with discrete diffusion applied within each block. This yields a tighter likelihood bound, variable-length generation, and KV caching for pre-viously decoded blocks. However, rigid left-to-right block structure restricts decoding flexibility for tasks requiring any-order generation such as infilling and arbitrary-position insertions (Li et al., 2025; Ma et al., 2026; Shu et al., 2026). Arriola et al. (2025a) also must delay KV cache updates until after a block is finished decoding because within-block denoising relies on bidirectional context (Wu et al., 2025; Seo et al., 2025). Finally, block diffusion limits parallel sam-pling since each block must be decoded before advancing (Liu et al., 2025b;a). Our key observation is that diffusion language models need not interpolate between autoregression and diffusion by varying a fixed block size; instead, they can interpolate by varying the order in which token sets are generated. Based on this, we introduce set diffusion, which defines an au-toregressive probability distribution over flexible-position, flexible-length sets of discrete random variables. Set diffu-sion generalizes block diffusion: fixed left-to-right blocks arise when sets are constrained to contiguous fixed-size blocks, while arbitrary-position and variable-length sets en-able flexible insertion, infilling, and sliding-window decod-ing. By interpolating between left-to-right and fully random orderings, set diffusion improves the tradeoff between sam-ple quality, inference efficiency, and decoding flexibility while supporting KV cache updates after every generation step. Across mathematical reasoning, summarization, and unconditional generation, set diffusion achieves better speed-quality tradeoffs than prior diffusion language models and substantially outperforms block diffusion on infilling. 1
+
+> arXiv:2607.01775v1 [cs.LG] 2 Jul 2026
+
+Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding Block Diffusion Set Diffusion (Ours) 
+
+❌ Fixed block partitioning 
+
+❌ KV-cache updates only after blocks 
+
+✅ Flexible position-biased decoding 
+
+✅ KV-cache updates after every step                                                                 
+
+> Wall clock time
+> Let’s break step by step this down -Let’s break step by step this down -1. ** Number of boats
+> Let’s break step by step this down -
+> Let’s break this down
+> Let’s break this down
+> Let’s break this down
+> Let’s break step by step this down
+> Let’s break by down
+> Let’s by down
+> Let’s break by this down
+> 1. **
+> Let’s break step by step this down 1. ** of
+> Let’s break step by this down **
+> More likely to decode Less likely to decode Block Diffusion Set Diffusion (Ours)
+> 80 100 120 140 160 55% 60% 65%
+> Improved
+> Tradeoff
+
+Speed (tokens/sec; ↑) GSM8K Test Accuracy (↑) 
+
+Figure 1. Left: Set diffusion generates tokens in arbitrary-position, arbitrary-length sets, biasing toward left-to-right decoding and updating the KV cache after each step. Block diffusion (Arriola et al., 2025a) is restricted to generate fixed-size sequential blocks and may only update the cache after each block completes. Right: Speed-accuracy tradeoffs on the GSM8K test (experimental details in Section L). 
+
+Our contributions are as follows: 1. We present set diffusion language models, which are autoregressive over flexible-length, flexible-position token sets, enabling variable-length generation and tunable generation orderings. 2. We introduce a set-causal diffusion architecture with KV cache updates after every inference step. 3. We show that set diffusion interpolates between AR and diffusion generation, enabling greater decoding flexibility and parallelism than block diffusion. 4. We demonstrate that set diffusion achieves state-of-the-art speed-quality tradeoffs among diffusion models across mathematical reasoning, infilling, summariza-tion, and unconditional generation. 
+
+## 2. Background 
+
+Notation We denote scalar discrete random variables with 
+
+V categories as one-hot column vectors and define V =
+
+{z ∈ { 0, 1}V : P 
+
+> ℓ
+
+zℓ = 1 } ⊂ ∆V to be the set of all such vectors, a subset of the simplex ∆V . We assume that the 
+
+V -th category corresponds to a special [MASK] token and denote its one-hot vector by m ∈ V . We define z1: L as a sequence of L tokens, where zℓ ∈ V , for ℓ ∈ 1, . . . , L, 
+
+and let VL denote the set of all such sequences. We write Cat (·; p) for a categorical distribution with parameters p ∈
+
+∆V , and ⊙ for the Hadamard product. 
+
+2.1. Discrete Diffusion Models 
+
+Diffusion models (Sohl-Dickstein et al., 2015; Song & Er-mon, 2019; Ho et al., 2020) are generative models that train a denoising network pθ to remove noise from latent vari-ables zt obtained from a corruption process q that adds increasing noise to clean data x as t increases. Discrete denoising diffusion probabilistic models (D3PM; Austin et al. (2021)) define corruption processes over discrete zt.MDLM (Sahoo et al., 2024) specializes to masked diffusion, which interpolates between clean data and a prior selected as 
+
+m: q(zt|x) = Cat (zt; αtx + (1 − αt)m), where αt = α(t)
+
+is a noise schedule decreasing in t. The optimal diffusion model pθ is the reverse of the forward process q. Sahoo et al. (2024) define pθ (zs|zt) = q(zs|zt, xθ (zt)) where the denoising model xθ (x | zt) predicts x given masked zt.The diffusion model pθ is fit by variational inference. Let 
+
+KL[ ·] denote the Kullback-Leibler divergence. The Neg-ative ELBO (NELBO) is given by (Sohl-Dickstein et al., 2015): 
+
+L(x; θ) = Eq
+
+h
+
+− log pθ (x | xt(1) )+
+
+> T
+
+X
+
+> j=1
+
+DKL 
+
+ q(xs(j) | xt(j), x) pθ (xs(j) | xt(j))
+
++ DKL 
+
+ q(xt(T ) | x) pθ (xt(T ))i
+
+(1) This objective has natural continuous-time extensions based on continuous-time Markov chains (CTMCs), as well as score-based variants (Song & Ermon, 2019; Lou et al., 2023; Sun et al., 2022). Subsequent simplifications (Sahoo et al., 2024; Shi et al., 2024; Ou et al., 2024) tighten the NELBO and improve empirical performance. 
+
+2.2. Block Diffusion Language Modeling 
+
+Block diffusion language models (BD3LM; Arriola et al. (2025a)) interpolate between AR and order-agnostic diffu-2Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+sion by factorizing the likelihood over B blocks of length 
+
+S. Adopting the shorthand from Arriola et al. (2025a), we denote tokens in block index b ∈ [1 , B ] as xb and preceding tokens as x<b . The likelihood factorizes as log pθ (x) = 
+
+PBb=1 log pθ (xb | x<b ), where each pθ (xb | x<b ) is mod-eled using diffusion. A block-causal transformer parame-terizes the reverse process pθ (zbs | zbt , x<b ), permitting KV caching for each block once decoded. However, rigid block-wise factorization limits both flexibility and speed: each block must be decoded before the next, restricting parallel sampling and arbitrary-position editing (e.g., infilling), and KV caches may only be updated once a block is completed. 
+
+## 3. Set Diffusion 
+
+We introduce set diffusion models, which factorize gener-ation over flexible-position, flexible-length token sets. By varying the token-set partition and ordering distribution, set diffusion recovers autoregression, fully non-autoregressive diffusion (Sahoo et al., 2024; Ou et al., 2024; Shi et al., 2024), and block diffusion (Arriola et al., 2025a) as special cases. We present a likelihood parameterization that sup-ports variable-length sampling and a set-causal architecture that enables KV cache updates after every inference step. 
+
+3.1. A Probabilistic Model for Set Diffusion 
+
+Set diffusion combines autoregressive and diffusion lan-guage modeling by factorizing generation over arbitrary-position, arbitrary-length token sets and modeling each token-set conditional with diffusion. 
+
+Definition 3.1 (Token set) . A position set is a nonempty subset σn ⊆ { 1, . . . , L } of token positions generated using diffusion. A position set sequence (or generation order) is a tuple σ = ( σ1, . . . , σ N ) of pairwise disjoint subsets over all positions where ∪Nn=1 σn = {1, . . . , L } and σi ∩ σj = ∅
+
+for i̸ = j. A token set is the set of tokens corresponding to a position set, denoted xσn .We marginalize over generation orders σ, each of which induces an autoregressive factorization over token sets 
+
+xσ1 , . . . , xσN . The resulting likelihood decomposes into position-selection probabilities from an order policy π and conditional token-set likelihoods, following the decomposi-tion from Turok et al. (2026): 
+
+pθ (x) = X
+
+> σN
+
+Y
+
+> n=1
+
+π(σn | x<σ n ) · pθ (xσn | x<σ n ) (2) At step n, π(σn | x<σ n ) selects the next positions to gen-erate and pθ (xσn | x<σ n ) assigns likelihood to the cor-responding token values, where x<σ n denotes tokens at positions from the previously selected sets. Directly optimizing (2) requires summing over combinatori-ally many generation orders. We therefore apply Jensen’s inequality over the latent order σ with a variational distribu-tion q(σ | x). In this work, we assume a data- and parameter-independent order policy and choose q(σ) ≡ π(σ) (Suppl. A). We model each pθ (xσn | x<σ n ) using diffusion over a to-ken set by introducing a reverse diffusion process as in Section 2.1, but restricted to set n: pθ (zσn 
+
+> s
+
+|zσn 
+
+> t
+
+, x<σ n ) = 
+
+q(zσn 
+
+> s
+
+|zσn 
+
+> t
+
+, xθ (zσn 
+
+> t
+
+, x<σ n )) where the denoising model 
+
+xθ (zσn 
+
+> t
+
+, x<σ n ) predicts xσn given noised zσn 
+
+> t
+
+and preced-ing clean sets in the generation order x<σ n . Applying the NELBO in (1) to each conditional term in (2) yields the set diffusion objective LSD (x; θ), which is itself a valid NELBO. Since the denoising model is conditioned on x<σ n ,we make this dependence on x<σ n , θ explicit in L:
+
+− log pθ (x) ≤ L SD (x; θ) := Eσ∼πNX
+
+> n=1
+
+L(xσn , x<σ n ; θ)
+
+(3) In Section 5.1, we identify examples where training is tractable. In practice, π can differ across training and infer-ence: at inference, we can use sampling methods such as confidence-based heuristics (Wu et al., 2025). The factorization in (2) supports the following capabilities: 1. Variable-Length Generation. At inference, we it-eratively sample a position set σn ∼ π(σn | x<σ n )
+
+from the remaining ungenerated positions, then the corresponding token set xσn ∼ pθ (xσn | x<σ n ).2. KV caching. After generating a token set xσn , its key and value vectors can be cached and reused to condition subsequent predictions. We provide further details in Section 3.2. 3. AR-Diffusion Interpolation. Set diffusion flexibly tunes (i) parallelism, through the token-set size |σn|
+
+and (ii) ordering bias, through the ordering distribu-tion π(σn|σ<n ). Our framework generalizes several standard generative modeling paradigms: • Autoregression is recovered when |σn| = 1 with left-to-right orders (Suppl. F). • Order-agnostic diffusion (Sahoo et al., 2024; Shi et al., 2024; Ou et al., 2024) is recovered when π
+
+is uniform (Suppl. B). • Block diffusion (Arriola et al., 2025a) is recov-ered when π selects contiguous fixed-size blocks in left-to-right order (Suppl. C). • Any-order AR (Uria et al., 2014) is recovered when |σn| = 1 and π is uniform (Suppl. D). • FlexMDM (Kim et al., 2025a) implements a learned π where σn is predicted by an auxiliary transformer output layer. 3Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+Algorithm 1 Set Diffusion Training 
+
+Require: data distribution q(x1: L), order distribution π(σ),model xθ , forward process qt(·| x), mask construction M
+
+repeat 
+
+x1: L ∼ q(x1: L) {Sample datapoint }
+
+Sample σ = ( σ1, . . . , σ N ) ∼ π(σ) {Set ordering }Mσ ← M (σ) {Construct set-causal mask }
+
+Sample t1, . . . , t N ∼ U [0 , 1] 
+
+∀n ∈ { 1, . . . , N } : zσn 
+
+> tn
+
+∼ qtn (· | xσn )
+
+xin ← xσ1: N ⊕ zσ1: N 
+
+> t1: N
+
+{Construct denoiser input }
+
+xσ1: N 
+
+> logit
+
+= xθ (xin , Mσ )
+
+Take gradient step on ∇θ LSD (xσ1: N 
+
+> logit
+
+; θ)
+
+until converged 
+
+Algorithm 2 Parallel Set Diffusion Sampling 
+
+Require: Prompt x1: P , model xθ , diffusion sampler SAMPLE , # steps N
+
+∅, K, V ← xθ (x1: P , ∅) {Cache prompt }
+
+σ0 ← { 1, . . . , P }
+
+for n = 1 to N do 
+
+˜σn ∼ π(˜ σn|x<σ n ) {Select candidate positions }
+
+σn, xσn ← SAMPLE (x˜σn 
+
+> θ
+
+, K<σ n , V<σ n )
+
+x ← x<σ n ⊕ xσn {Keep accepted tokens }∅, Kσn , Vσn ← xσn 
+
+> θ
+
+(xσn , K<σ n , V<σ n )(K, V) ← (K<σ n ⊕ Kσn , V<σ n ⊕ Vσn )
+
+σ ← σ<n ∪ σn
+
+end for return xσ
+
+3.2. Set Diffusion Architecture 
+
+We parameterize each term pθ (xσn | x<σ n ) using a single neural network xθ , following the same notation from Ar-riola et al. (2025a). Specifically, we parameterize xθ using a transformer (Vaswani et al., 2017) which outputs token probabilities and key-value caches Kσn , Vσn . Unlike block diffusion, where the denoiser predicts a fixed contiguous block, set diffusion may query an arbitrary set of positions depending on the ordering distribution π(σ). When xθ is trained, xσn 
+
+> θ
+
+(zσn 
+
+> t
+
+, x<σ n ) yields predictions for denoised to-kens in set σn based on noised zσn 
+
+> t
+
+and clean x<σ n . The transformer uses a set-causal attention mask, where tokens in a set σn attend to tokens in sets σ1, . . . , σ n (Suppl. K). As in autoregressive decoding, previously generated token sets need not be reprocessed at every step; their keys and values can instead be cached and reused. We denote the keys and values for set σn by Kσn and Vσn , and define xθ
+
+to both consume cached context and return updated cache entries. Its full signature is 
+
+xσn
+
+> logit
+
+, Kσn , Vσn ← xσn 
+
+> θ
+
+(zσn 
+
+> t
+
+, K<σ n , V<σ n ):= xσn 
+
+> θ
+
+(zσn 
+
+> t
+
+, x<σ n ) (4) where xσn 
+
+> logit
+
+denotes the predictions for clean xσn and 
+
+K<σ n , V<σ n are the keys and values cached on a for-ward pass of xθ over x<σ n (hence the inputs x<σ n and 
+
+K<σ n , V<σ n are equivalent). 
+
+3.3. Training Objective We train set diffusion models using maximum likelihood estimation by minimizing the NELBO in (3). Training is especially tractable for a fixed ordering dis-tribution π(σ) that is independent of the data and model parameters. In this setting, we may first sample σ ∼ π
+
+and then approximate LSD (x; θ) using Monte Carlo with a single ordering PNn=1 L(xσn , x<σ n ; θ). Learned orderings are also compatible with set diffusion, but optimizing them requires propagating gradients through discrete sampling (Wang et al., 2025c); we leave this for future work. 
+
+Optimization We train with mini-batch gradient descent using an efficient algorithm that computes likelihoods for all token sets in a single forward pass (Alg. 1). Ideally, one would use a single forward pass of xθ to estimate 
+
+pθ (zσn 
+
+> s
+
+|zσn 
+
+> t
+
+, x<σ n ) for n = 1 , . . . , N . However, the de-noising loss for set xσn is computed from its noisy version 
+
+zσn 
+
+> t
+
+, whereas subsequent sets condition on the clean version 
+
+xσn . Thus, each token set must appear both as clean context and as a noisy query. We propose a vectorized implementation following Arriola et al. (2025a) to compute LSD (x; θ) in one forward pass by concatenating the clean and noisy views: 
+
+xin = xσ1 ⊕ · · · ⊕ xσN
+
+| {z }
+
+> clean sets
+
+⊕ zσ1 
+
+> t1
+
+⊕ · · · ⊕ zσN
+
+> tN
+
+| {z }
+
+> noisy query sets
+
+(5) where tn is the noise level applied to token set xσn . We design an ordering-dependent attention mask for xin so that noisy tokens attend to other noisy tokens in their set and to all clean tokens in preceding sets (see Suppl. K). 
+
+3.4. Inference 
+
+At inference, we ancestrally sample token sets using Al-gorithm 2. At step n, we sample candidate positions 
+
+˜σn ∼ π(˜ σn | x<σ n ) and call any sampling procedure 
+
+σn, xσn ← SAMPLE (x˜σn 
+
+> θ
+
+, K<σ n , V<σ n ), (6) which samples from pθ (x˜σn | x<σ n ) and may accept 
+
+σn ⊆ ˜σn. Accepted tokens are committed and passed through the transformer once to append Kσn , Vσn to the cache. Note that this procedure allows the use of a different ordering distribution π at inference than at training, e.g., to implement confidence-based heuristics (Wu et al., 2025). 4Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+## 4. Interpolating Between Token Orderings 
+
+We now describe a structured family of ordering distribu-tions π(σ) that interpolates between order-agnostic diffu-sion and autoregression by changing the order in which token positions are revealed. We specialize to fixed, data-and parameter-independent ordering distributions induced by position-dependent reveal-time schedules. This interpo-lation controls the speed–quality tradeoff in set diffusion: order-agnostic generation enables larger, more flexible to-ken sets for parallel decoding, while stronger left-to-right bias tightens the NELBO and improves sample quality. Block diffusion (Arriola et al., 2025a) instantiates this trade-off by varying a block size, but its fixed contiguous blocks restrict arbitrary-position insertion. Instead, we parameter-ize π(σ) through position-dependent reveal-time distribu-tions: each token position is assigned a random reveal time, and sorting the sampled reveal times induces a generation order. The resulting position-offset schedules provide a simple mechanism for controlling left-to-right bias while retaining flexible-position decoding. 
+
+4.1. Token Ordering via Position-Dependent Schedules 
+
+Rather than parameterizing π(σ) directly over the combi-natorial space of orderings, we induce it from position-dependent ordering schedules. Intuitively, each position 
+
+ℓ is assigned a random reveal time Rℓ ∈ [0 , 1] ; positions whose reveal-time distributions place more mass near zero are more likely to appear earlier in the generation order. For each position ℓ, let αℓτ ∈ [0 , 1] be a monotonically increasing schedule over ordering time τ ∈ [0 , 1] . The quan-tity αℓτ is the probability that position ℓ has been revealed by time τ , with boundary conditions αℓ 
+
+> 0
+
+= 0 and αℓ 
+
+> 1
+
+= 1 .Hence, Pr( Rℓ ≤ τ ) = αℓτ defines the CDF of the token-specific reveal time Rℓ, where Rℓ has density fℓ(τ ) = ˙ αℓτ .We independently sample Rℓ for each position and sort the sampled reveal times in ascending order to obtain a gen-eration ordering σ = argsort (R1, . . . , R L). Reveal times can also be rounded to a grid with m intervals on [0 , 1] 
+
+as ˜Rℓ = 1 
+
+> m
+
+arg min i∈{ 0,...,m } im − Rℓ to induce a posi-tion sequence of non-singleton sets, where each set groups together identical rounded reveal times. This construction can be viewed as a multivariate masked diffusion schedule over token positions; in Suppl. E, we derive the corresponding NELBO and show that, unlike the univariate case, the objective depends on the trajectory of the token-wise schedule, following similar findings for Gaussian diffusion (Sahoo et al., 2023). Token index 1 2 3 4                                
+
+> Ordering Priority Pr( Rℓ
+> < τ)
+> AR
+> C = 1.0 token(s)
+> 00.5 100.5 1
+> τ
+> Sliding-Window SetDLM
+> C = 1.2 token(s)
+> 00.5 1
+> τ
+> Sliding-Window SetDLM
+> C = 1.5 token(s)
+> 00.5 100.5 1
+> τ
+> MDLM
+> C = 2.0 token(s)
+> 00.5 1
+> τ
+> Figure 2. Position-offset reveal-time CDFs for L= 4 tokens. For the ℓ-th token, Rℓ∈[0 ,1] is its reveal time and Pr( Rℓ≤τ)is the probability that token ℓhas been revealed by normalized ordering time τ∈[0 ,1] . The decoding width wcontrols the ordering bias, interpolating between AR and order-agnostic diffusion generation.
+> ¯Cdenotes the expected inference prediction budget (Def. 4.2).
+
+4.2. Position-Offset Schedules 
+
+We instantiate ατ as evenly spaced monotone schedules that bias generation toward left-to-right orderings. Specifi-cally, token ℓ ∈ { 1, . . . , L } has an active generation interval 
+
+[aℓ, a ℓ + w] with window size w ∈ (0 , 1] (Figure 2). Before this interval, the token is selected with zero probability; after this interval, it is guaranteed to have been generated. 
+
+αℓτ =
+
+
+
+0 if τ ≤ aℓτ −aℓ 
+
+> w
+
+if aℓ < τ < a ℓ + w
+
+1 if τ ≥ aℓ + w
+
+(7) The window size w controls the strength of the left-to-right bias—smaller w reduces overlap between active generation intervals, making earlier tokens likely to be generated first. 
+
+4.3. Properties 
+
+Position-dependent ordering schedules control the distribu-tion of prediction tasks seen during training and inference. For position-offset schedules as w → 1 
+
+> L
+
+, the ordering distri-bution concentrates on left-to-right generation orders. We establish the following result in Suppl. F. 
+
+Proposition 4.1. As the unmasking width w → 1/L , the per-token ELBO tends to an autoregressive objective. In the limit, this holds true with equality and the ELBO is tight. 
+
+The generation window size w interpolates between MDLM and AR. When w = 1 , all positions share the same schedule, 
+
+αℓτ = τ , recovering order-agnostic generation (e.g., MDLM 5Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+(Sahoo et al., 2024; Shi et al., 2024; Ou et al., 2024)); when 
+
+w = 1 
+
+> L
+
+, the active generation intervals are non-overlapping and only one token may be generated at a time, recovering AR generation (Suppl. F). Thus, smaller w improves per-plexity, while larger w permits more parallel and arbitrary-position generation. To compare set diffusion and block diffusion under matched inference parallelism, we use the “expected inference prediction budget” (Suppl. H): 
+
+Definition 4.2 (Expected inference prediction budget) . The expected number of tokens eligible for prediction at a given ordering time, averaged over τ ∈ [0 , 1] . A token at position 
+
+ℓ is eligible at ordering time τ if it has not yet been generated and τ lies in its active generation interval: 
+
+¯C =
+
+Z 10
+
+> L
+
+X
+
+> ℓ=1
+
+Pr( Rℓ > τ ) · 1{ ˙αℓτ̸ = 0 } dτ (8) 
+
+## 5. Sliding-Window Set Diffusion Language Models (SW-SetDLMs) 
+
+We introduce Sliding-Window Set Diffusion Language Mod-els (SW-SetDLMs), a practical instantiation of set diffusion with a position-offset ordering distribution π(σ), a factor-ized token-set likelihood, and an order-causal transformer architecture. These choices enable variable-length sliding-window decoding, KV cache updates after each inference step, and low-variance training. Unlike block diffusion (Ar-riola et al., 2025a), SW-SetDLMs decode flexible-position, flexible-length sets while preserving a left-to-right bias for high-quality generation. 
+
+5.1. Probabilistic Model 
+
+SW-SetDLMs instantiate the set diffusion likelihood in (2) with two modeling choices. First, we use an order distribu-tion π(σ | x) = π(σ) induced by a position-offset schedule whose mass is biased toward left-to-right orders. This bias controls interpolation between order-agnostic diffusion and autoregression: stronger left-to-right bias yields a tighter NELBO, while weaker bias permits increased parallelism. Second, we use a factorized one-shot denoising likelihood within each token set, pθ (xσn | x<σ n ) = Q 
+
+> ℓ∈σn
+
+pθ (xℓ |
+
+x<σ n ), similar to Turok et al. (2026). As a result, the set size |σn| is the primary control on inference parallelism: all tokens in σn are predicted simultaneously conditioned on the same revealed context x<σ n , and the generated tokens can be committed to the KV cache before the next genera-tion step. Equivalently, SW-SetDLMs use masked diffusion restricted to the selected set with a single denoising step, 
+
+T = 1 : the forward process fully masks a set and the reverse denoising model xθ (mσn , x<σ n ) predicts each token xℓ for 
+
+ℓ ∈ σn in parallel from clean x<σ n . This assumes condi-tional independence across tokens in the set {xℓ : ℓ ∈ σn}
+
+given the revealed context.          
+
+> xσ1
+> xσ2
+> xσ3
+> xσ4
+> zσ1
+> t1
+> zσ2
+> t2
+> zσ3
+> t3
+> zσ4
+> t4
+> xσ1
+> xσ2
+> xσ3
+> xσ4
+> zσ1
+> t1
+> zσ2
+> t2
+> zσ3
+> t3
+> zσ4
+> t4
+> Figure 3. Causal attention mask for L= 4 singleton token sets, ordering σ, clean tokens xσ1: N, and corrupted tokens zσ1: N
+> t1: N.
+
+5.2. Architecture 
+
+SW-SetDLMs use a set-causal transformer whose attention pattern follows the sampled generation order. During train-ing, singleton token sets allow each input sequence to be permuted into generation order, reducing set-causal atten-tion to a reusable standard causal mask that avoids per-order mask construction and is compatible with compiled block-sparse attention implementations (Dong et al., 2024). 
+
+5.3. Training Objective While set diffusion permits arbitrary token sets, SW-SetDLMs specialize training to singleton sets for ar-chitectural and training efficiency. Singleton sets allow a fixed causal mask (Section 5.2) and enable a token-efficient, low-variance estimator in which each sampled ordering con-tributes all L conditional likelihoods. Concretely, we sample a full ordering over token positions and predict each token conditioned on tokens that precede it in that ordering: 
+
+− log pθ (x) ≤ L SD (x; θ) := −Eσ∼πLX
+
+> n=1
+
+log pθ (xσn |x<σ n )
+
+(9) We allow non-uniform π (Suppl. A), unlike Hoogeboom et al. (2021), to emphasize favorable generation orderings and tighten the NELBO (Prop. 4.1). A masked-diffusion-style estimator follows by sampling an ordering step and averaging over possible next tokens (Suppl. B): 
+
+− log pθ (x)
+
+≤ − N En,σ <n 
+
+X
+
+> k∈σ≥n
+
+π(σn = k | σ<n ) log pθ (xk | x<σ n )
+
+(10) 6Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+When π is uniform, (10) recovers the standard masked diffusion objective (Sahoo et al., 2024; Shi et al., 2024; Ou et al., 2024). Under strong ordering bias, however, 
+
+π(σn = k | σ<n ) concentrates on a few eligible positions, so (10) receives gradient signal from only a few token predic-tions per mini-batch (Arriola et al., 2025a). We optimize (9), which uses all L conditional factors per sampled ordering and yields lower-variance training (see Table 5). 
+
+Table 1. Evaluation on GSM8K test set. Best diffusion value is 
+
+bolded . We report decoding throughput ( Tput ) in tokens / sec over 200 generations on an H100 80GB GPU. We use T = L
+
+total sampling steps, so the throughput can be higher for diffusion models when T < L . For MDLM (Sahoo et al., 2024), we use confidence-aware parallel decoding with threshold 0.9 and block-wise decoding with S = 32 for tractable inference. See Section L for experimental details. PPL (↓)0-shot pass@1( ↑)
+
+Tput 
+
+(↑)AR Transformer 1.25 75.74 67 .16 ±0.84 
+
+MDLM ≤2.10 6.37 ≥24 .48 ±3.82 
+
+BD3LM S = 16 ≤1.67 50.49 ≥52 .18 ±0.48 
+
+S = 8 ≤1.53 56.94 ≥54 .67 ±0.61 
+
+S = 4 ≤1.41 63.53 ≥55 .39 ±0.62 
+
+SW-SetDLM S ≤ 32 ≤1.59 61.94 ≥55 .08 ±1.09 
+
+S ≤ 16 ≤1.50 63.91 ≥56 .50 ±0.75 
+
+S ≤ 8 ≤1.42 66.41 ≥60 .42 ±0.14 
+
+Optimization We optimize SW-SetDLMs with set diffu-sion training specialized to singleton token sets (Section 3.3). For each sampled ordering, a single causal forward pass computes all L conditional terms in Eq. 9. Unlike prior masked diffusion objectives, which compute gradients only from masked tokens (Arriola et al., 2025a; Sahoo et al., 2024), SW-SetDLM uses every token position, reducing gra-dient variance. The same objective supports one-pass full-sequence likelihood computation, useful for applications including efficient policy-gradient estimation in reinforce-ment learning (Wang et al., 2025b; Sahoo et al., 2025b). 
+
+5.4. Inference 
+
+SW-SetDLM inference instantiates set diffusion sampling (Section 3.4) with the position-offset ordering schedule. At step n, the schedule selects candidate positions ˜σn from the ungenerated tokens whose active generation intervals 
+
+[aℓ, a ℓ +w] contain the current ordering time τn. We restrict 
+
+˜σn to a sliding output window of size at most Smax tokens and denoise all positions ˜σn in parallel from the current KV cache. The sampler accepts σn ⊆ ˜σn and assigns token values 
+
+xσn . Accepted tokens are committed, ordered according to the schedule-induced causal order, and passed through the transformer once to append Kσn , Vσn to the cache. AR Block Diffusion (S=4) Ours: Set Diffusion (S≤8) Block Diffusion (S=16) Ours: Set Diffusion (S≤32)    
+
+> 50 100 150 200 35% 40% 45% 50% 55% 60% 65% 70% 75%
+> Improved
+> Tradeoff
+> Speed (tokens/sec; ↑) Accuracy (↑)
+
+Figure 4. Set diffusion achieves better speed-accuracy tradeoffs on the GSM8K test set compared to block diffusion (Arriola et al., 2025a), where S denotes the training output window size. We report decoding throughput ( Tput ) in tokens / sec on an H100 80GB GPU. Details in Section L. 
+
+## 6. Experiments 
+
+We evaluate set diffusion on mathematical reasoning, sum-marization, unconditional generation, and likelihood estima-tion (full details in Suppl. L). We train set diffusion models by varying the decoding window size w to match the infer-ence prediction budget (Def. 4.2) of block diffusion models of block sizes S ∈ { 4, 8, 16 } (see Suppl. H). Unlike block diffusion, we tune our schedule to allow any-order decod-ing up to 2S positions ahead, providing greater decoding flexibility for tasks such as infilling. Thus, our set diffusion models have maximum window sizes Smax ∈ { 8, 16 , 32 }.We examine 1) mathematical reasoning (GSM8K; Cobbe et al. (2021)) with zero-shot pass@1 accuracy, as well as 2) text summarization (CNN/DailyMail; Hermann et al. (2015); See et al. (2017)) and 3) infilling (Mostafazadeh et al., 2016) for which we compute ROUGE scores (Lin, 2004). We also train set diffusion models on pretraining datasets OpenWebText (OWT; Gokaslan et al. (2019)) and One Billion Words (LM1B; Chelba et al. (2014)), for which we compute perplexity (PPL) on their validation splits. 
+
+6.1. Mathematical Reasoning 
+
+On GSM8K, set diffusion shows improved accuracy and decoding throughput compared to diffusion baselines. In Figure 4, we map the speed-quality Pareto frontier, showing that set diffusion attains a strictly better tradeoff than block diffusion. We provide qualitative results in Suppl. N.2. 7Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding Model Size Tokens Infill 1/5 Infill 3/5 
+
+R-1 / 2 / L (↑) Tput (↑) R-1 / 2 / L (↑) Tput (↑)
+
+Autoregression 
+
+GPT2-S † (Radford et al., 2019) 127M n/a 9.5 / 0.4 / 8.7 - 13.5 / 0.6 / 10.2 -AR Transformer (Sahoo et al., 2024) 130M 157B 8.2 / 0.5 / 7.6 159 .7±1.8 18.3 / 1.3 / 13.1 158 .4±0.8
+
+Diffusion 
+
+SEDD-S † (Lou et al., 2023) 170M 210B 11.6 / 0.8 / 10.7 - 16.2 / 1.3 / 12.2 -MDLM (Sahoo et al., 2024) 130M 157B 14.5 / 1.6 / 13.3 ≥71 .9±2.9 22.2 / 2.3 / 15.2 ≥72 .6±2.7
+
+DiffuGPT-S † (Gong et al., 2025) 127M n/a 14.0 / 1.5 / 13.0 - 16.4 / 2.0 / 14.2 -ASSD † (Guo & Ermon, 2025) 110M 45B 13.1 / 1.1 / 12.0 - 18.0 / 1.4 / 13.2 -
+
+AR+Diffusion Hybrid 
+
+BD3LM S = 16 (Arriola et al., 2025a) 110M 157B 9.2 / 0.6 / 8.6 ≥105 .8±4.5 15.8 / 0.8 / 11.1 ≥114 .2±1.3
+
+SW-SetDLM S ≤ 32 (Ours) 110M 157B 11.6 / 1.0 / 10.9 ≥132 .0±1.8 18.1 / 1.3 / 13.2 ≥123 .1±2.6
+
+Table 2. ROCStories infilling ROUGE scores ( ↑). “Infill k/5”, infills k middle sentences given the rest. We report decoding throughput (Tput ) in tokens / sec on an H100 80GB GPU. Diffusion models use the maximum number of sampling steps, thus we report throughput as a lower bound. † indicates values reported from Guo & Ermon (2025). 
+
+6.2. Infilling 
+
+Following Gong et al. (2025), we evaluate infilling on 1871 five-sentence ROCStories examples (Mostafazadeh et al., 2016) using OWT-trained models. Set diffusion infills one or three middle sentences and achieves higher ROUGE than block diffusion with up to ∼25% faster decoding (Table 2). MDLM is substantially slower because it lacks KV caching and recomputes the full 1024-token context at every denois-ing step, despite ROCStories examples being much shorter. Qualitative samples are in Suppl. N.1. 
+
+6.3. Summarization 
+
+On text summarization, set diffusion achieves competitive ROUGE scores compared to diffusion baselines and up to 
+
+10% faster decoding than block diffusion (Table 3). Set dif-fusion outperforms an AR baseline, which we find overfits on CNN/DailyMail. In contrast, diffusion models train on diverse prediction tasks that mitigate overfitting (Prabhude-sai et al., 2025). 
+
+6.4. Unconditional Sampling and Likelihood Estimation 
+
+We evaluate sample quality on OWT with MAUVE (Pillutla et al., 2021). Table 4 shows that set diffusion improves MAUVE over block diffusion while decoding faster. On LM1B, set diffusion achieves the best test perplexity among diffusion models in Table 9, particularly for window size S ≤ 8, while maintaining consistently higher decoding throughput than prior diffusion models. On OWT (Suppl. M), when block diffusion and set diffusion have comparable likelihoods, set diffusion achieves 22% faster decoding. 
+
+Table 3. CNN/DailyMail test set ROUGE scores ( ↑). We report decoding throughput ( Tput ) over 1k samples in tokens / sec on an 
+
+H100 80GB GPU. Diffusion models are evaluated with T = L
+
+total sampling steps; fewer steps ( T < L ) can increase throughput. ROUGE (↑)1 2 L
+
+Past baselines 
+
+GPT-2 (Radford et al., 2019) 29.3 8.3 26.6 BERT-L (Liu & Lapata, 2019) 41.7 19.4 38.8 T5-L (Raffel et al., 2020) 42.5 20.7 39.8 AR-Diff. ( k = 50 ) (Wu et al., 2023a) 39.6 16.3 37.1 GENIE ( k = 50 ) (Lin et al., 2023) 29.3 8.3 21.9 
+
+Tput (↑) 1 2 LAR Transformer 52 .4±0.9 32.2 11.6 22.0 MDLM ≥32 .3±0.8 35.9 15.1 23.6 BD3LM S = 16 ≥38 .8±0.2 40.0 17.8 27.0 
+
+S = 8 ≥38 .9±0.3 39.8 17.4 26.8 
+
+S = 4 ≥41 .3±0.4 38.8 16.7 26.4 SW-SetDLM (Ours) S ≤ 32 ≥42 .3±0.8 38.1 17.3 27.3 
+
+S ≤ 16 ≥42 .8±0.5 38.2 17.2 27.1 
+
+S ≤ 8 ≥44 .7±0.8 38.0 16.8 26.7 
+
+6.5. Ablations 
+
+We ablate two set diffusion design choices under a fully order-agnostic schedule: (1) the causal architecture enabling efficient KV caching, and (2) token-efficient training. Ta-ble 6 shows that SW-SetDLMs achieve higher decoding throughput and improved GSM8K accuracy compared to a bidirectional variant without KV caching or token-efficient training. Table 5 shows that leveraging all tokens in a batch reduces gradient variance by ∼ 3× and accelerates conver-gence compared to naive training (Sahoo et al., 2024). 
+
+## 7. Related Work, Discussion, and Conclusion 
+
+Comparison to MDLMs Set diffusion builds on de-noising discrete diffusion (Austin et al., 2021) and recent 8Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding                                                  
+
+> Table 4. MAUVE ( ↑) of 1k samples of maximum length L≤1024 .We report decoding throughput ( Tput ) in tokens / sec on 4 A6000 48GB GPUs. Diffusion models are evaluated with T=Ltotal sampling steps; using fewer steps ( T < L ) can increase throughput. Details in Suppl. L. Bold : best diffusion value. Model MAUVE
+> (↑)Entropy Tput
+> (↑)
+> AR 92.94 5.02 97 .80 ±1.27
+> BD3LM S= 16 64.91 4.37 ≥81 .22 ±0.68
+> SW-SetDLM S≤32 71.98 4.23 ≥91 .30 ±0.71
+> Table 5. LM1B test perplexity and gradient variance (Suppl. K.1) over the last 10 gradient updates from training over 50K examples (3.3B tokens). Bold : best diffusion value. PPL ( ↓)Grad. Var. ( ↓)SW-SetDLM S≤L≤42.02 2.73 ×10 −2
+> - efficient training ≤54.49 7.50 ×10 −2
+> - causal mask ≤46.00 15 .01 ×10 −2
+
+MDLMs focusing on masking noise (Lou et al., 2023; Shi et al., 2024; Sahoo et al., 2024), with two key improvements: (1) prior diffusion language models use order-agnostic or-dering schedules, whereas we employ position-dependent ordering schedules that tighten the ELBO; (2) our causal dif-fusion architecture enables KV caching and variable-length generation, which prior approaches do not support. Al-though Kim et al. (2025b); Seo et al. (2025); Shu et al. (2026) explore non-uniform generation orders, they rely on heuristic ordering rather than our principled per-token noise parameterization, and their bidirectional transformer pre-cludes flexible-length generation and KV caching. Esoteric Language Models (Sahoo et al., 2025b) also interpolate be-tween diffusion and AR, but do so using an order-agnostic diffusion stage before left-to-right AR completion, rather than defining a diffusion process with a left-to-right genera-tion bias. While they also use a causal architecture for KV caching, their training objective applies supervision only at randomly masked positions, resulting in sparser training signals than our objective, and they do not explore variable-length generation. WeDLM (Liu et al., 2025a) adopts a causal transformer architecture for KV caching but does not support variable-length generation or tunable interpolation between diffusion and AR.              
+
+> Table 6. Effect of efficient training and KV caching on GSM8K performance. Decoding throughput ( Tput ) is measured in tokens / sec on an H100 80GB GPU. We report mean ±standard devia-tion for 200 samples. 0-shot pass@1 ( ↑)
+> Tput
+> (↑)SW-SetDLM S≤L26.61 40 .83 ±0.38
+> - eff. training, causal mask 6.37 24 .48 ±3.82
+
+Comparison to Block Diffusion Block diffusion models (Arriola et al., 2025a) (also known as semi-autoregressive models (Han et al., 2022; 2023)) unmask tokens in strict left-to-right blocks, which sacrifices infilling flexibility and restricts parallelism, as each block must be fully decoded be-fore advancing. In contrast, we support decoding in sliding-window sets. While Arriola et al. (2025a) update KV caches once a block is fully decoded, we update the KV cache after every inference step for greater efficiency. 
+
+Comparison to FlexMDM FlexMDM (Kim et al., 2025a) also uses any-order autoregression for flexible-length diffu-sion sampling. However, it introduces separate schedules for masked token insertion and unmasking, requires a separate insertion network to predict inserted tokens at each step, and uses a bidirectional transformer to parameterize token like-lihoods, precluding KV caching. In contrast, set diffusion explicitly models generation order, supports flexible-length generation without an insertion network while adhering to a user-specified inference budget, and enables KV caching. 
+
+Comparison to Any-Order Autoregressive Models Our objective is related to the AO-ARM (Uria et al., 2014), whose objective is equivalent to fully non-AR diffusion (Hoogeboom et al., 2021; Ou et al., 2024; Uria et al., 2014; Shih et al., 2022). Unlike prior AO-ARMs which optimize over uniform orders and sample a single trajectory step dur-ing training (Uria et al., 2014; Hoogeboom et al., 2021; Ou et al., 2024), SW-SetDLMs use non-uniform orders and efficiently predict all token likelihoods simultaneously. While Shih et al. (2022) allow non-uniform π(σ), their method cannot flexibly interpolate ordering distributions and uses a bidirectional transformer, preventing KV caching and variable-length inference. Methods that learn orderings via variational inference (Wang et al., 2025c) or confidence-based unmasking policies (Kim et al., 2026) require complex optimization to discover effective orderings, whereas we im-pose a structured prior over π(σ) motivated by the success of block-wise generation (Arriola et al., 2025a). 
+
+Limitations Although the gap between set diffusion and autoregression has narrowed, there is still a tradeoff between accuracy and parallelization in tuning the position-offset ordering schedules. The ideal schedule can be hand-tuned based on user preferences and/or parallelization capabilities of the inference hardware, or learned throughout training (Kim et al., 2026; Wang et al., 2025c). 
+
+Conclusion This work introduces set diffusion, a frame-work for interpolating between AR and diffusion decoding by tuning generation orders rather than fixed block struc-ture. Set diffusion supports flexible-length generation and KV caching with a causal diffusion architecture, achieving state-of-the-art speed-quality tradeoffs across benchmarks. 9Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+## Impact Statement 
+
+This paper presents work whose goal is to advance the field of Machine Learning. There are many potential societal consequences of our work, none which we feel must be specifically highlighted here. 
+
+## Acknowledgements 
+
+This work was partially funded by the National Sci-ence Foundation under award CAREER 2145577, and by the National Institute of Health under award MIRA R35GM151243. Marianne Arriola is supported by a NSF Graduate Research Fellowship under award DGE-2139899 and a Hopper-Dean/Bowers CIS Deans Excellence Fellow-ship. Marianne Arriola thanks Yair Schiff and Gilad Turok for feedback on paper figures. 
+
+## References 
+
+Arriola, M., Gokaslan, A., Chiu, J. T., Han, J., Yang, Z., Qi, Z., Sahoo, S. S., and Kuleshov, V. Interpolating au-toregressive and discrete denoising diffusion language models. In The Thirteenth International Conference on Learning Representations , 2025a. URL https: //arxiv.org/abs/2503.09573 .Arriola, M., Venkat, N., Granskog, J., and Germanidis, A. Adapting autoregressive vision language models for parallel diffusion decoding. Runway AI Blog Post , 2025b. URL https://runwayml.com/research/ autoregressive-to-diffusion-vlms .Austin, J., Johnson, D. D., Ho, J., Tarlow, D., and Van Den Berg, R. Structured denoising diffusion models in discrete state-spaces. Advances in Neural Information Processing Systems , 34:17981–17993, 2021. Chelba, C., Mikolov, T., Schuster, M., Ge, Q., Brants, T., Koehn, P., and Robinson, T. One billion word benchmark for measuring progress in statistical language modeling, 2014. Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H., Kaiser, L., Plappert, M., Tworek, J., Hilton, J., Nakano, R., Hesse, C., and Schulman, J. Training verifiers to solve math word problems. arXiv preprint arXiv:2110.14168 ,2021. Dai, Z., Yang, Z., Yang, Y., Carbonell, J., Le, Q. V., and Salakhutdinov, R. Transformer-xl: Attentive language models beyond a fixed-length context. arXiv preprint arXiv:1901.02860 , 2019. Devlin, J., Chang, M.-W., Lee, K., and Toutanova, K. Bert: Pre-training of deep bidirectional transformers for lan-guage understanding. arXiv preprint arXiv:1810.04805 ,2018. Dhariwal, P. and Nichol, A. Diffusion models beat gans on image synthesis. Advances in neural information processing systems , 34:8780–8794, 2021. Dong, J., Feng, B., Guessous, D., Liang, Y., and He, H. Flex attention: A programming model for gen-erating optimized attention kernels. arXiv preprint arXiv:2412.05496 , 2(3):4, 2024. Gokaslan, A., Cohen, V., Pavlick, E., and Tellex, S. Open-webtext corpus. http://Skylion007.github. io/OpenWebTextCorpus , 2019. Gong, S., Agarwal, S., Zhang, Y., Ye, J., Zheng, L., Li, M., An, C., Zhao, P., Bi, W., Han, J., Peng, H., and Kong, L. Scaling diffusion language models via adap-tation from autoregressive models. In The Thirteenth International Conference on Learning Representations ,2025. URL https://openreview.net/forum? id=j1tSLYKwg8 .Guo, G. and Ermon, S. Reviving any-subset autoregressive models with principled parallel sampling and speculative decoding. arXiv preprint arXiv:2504.20456 , 2025. Han, X., Kumar, S., and Tsvetkov, Y. Ssd-lm: Semi-autoregressive simplex-based diffusion language model for text generation and modular control. arXiv preprint arXiv:2210.17432 , 2022. Han, X., Kumar, S., Tsvetkov, Y., and Ghazvininejad, M. David helps goliath: Inference-time collaboration be-tween small specialized and large general diffusion lms. 
+
+arXiv preprint arXiv:2305.14771 , 2023. Hermann, K. M., Kocisk ´y, T., Grefenstette, E., Espeholt, L., Kay, W., Suleyman, M., and Blunsom, P. Teaching machines to read and comprehend. In NIPS , pp. 1693– 1701, 2015. Ho, J., Jain, A., and Abbeel, P. Denoising diffusion proba-bilistic models. Advances in neural information process-ing systems , 33:6840–6851, 2020. Hoogeboom, E., Gritsenko, A. A., Bastings, J., Poole, B., Berg, R. v. d., and Salimans, T. Autoregressive diffusion models. arXiv preprint arXiv:2110.02037 , 2021. Kim, J., Cheuk-Kit, L., Domingo-Enrich, C., Du, Y., Kakade, S., Ngotiaoco, T., Chen, S., and Albergo, M. Any-order flexible length masked diffusion. arXiv preprint arXiv:2509.01025 , 2025a. Kim, J., Shah, K., Kontonis, V., Kakade, S., and Chen, S. Train for the worst, plan for the best: Understand-ing token ordering in masked diffusions. arXiv preprint arXiv:2502.06768 , 2025b. 10 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+Kim, J., Geuter, J., Alvarez-Melis, D., Kakade, S., and Chen, S. Stop training for the worst: Progressive unmasking accelerates masked diffusion training. arXiv preprint arXiv:2602.10314 , 2026. Kingma, D. and Gao, R. Understanding diffusion objectives as the elbo with simple data augmentation. Advances in Neural Information Processing Systems , 36, 2024. Kingma, D. P. and Welling, M. Auto-encoding variational bayes. arXiv preprint arXiv:1312.6114 , 2013. Kuleshov, V. Fast algorithms for sparse principal component analysis based on rayleigh quotient iteration. In Interna-tional Conference on Machine Learning , pp. 1418–1425. PMLR, 2013. Li, S., Gu, J., Liu, K., Lin, Z., Wei, Z., Grover, A., and Kuen, J. Sparse-lavida: Sparse multimodal discrete diffu-sion language models. arXiv preprint arXiv:2512.14008 ,2025. Li, X., Thickstun, J., Gulrajani, I., Liang, P. S., and Hashimoto, T. B. Diffusion-lm improves controllable text generation. Advances in Neural Information Process-ing Systems , 35:4328–4343, 2022. Lin, C.-Y. Rouge: A package for automatic evaluation of summaries. In Text summarization branches out , pp. 74–81, 2004. Lin, Z., Gong, Y., Shen, Y., Wu, T., Fan, Z., Lin, C., Duan, N., and Chen, W. Text generation with diffusion language models: A pre-training approach with continuous para-graph denoise. In International Conference on Machine Learning , pp. 21051–21064. PMLR, 2023. Liu, A., He, M., Zeng, S., Zhang, S., Zhang, L., Wu, C., Jia, W., Liu, Y., Zhou, X., and Zhou, J. Wedlm: Reconciling diffusion language models with standard causal atten-tion for fast inference. arXiv preprint arXiv:2512.22737 ,2025a. Liu, Y. and Lapata, M. Text summarization with pretrained encoders. arXiv preprint arXiv:1908.08345 , 2019. Liu, Y., Cao, Y., Li, H., Luo, G., Chen, Z., Wang, W., Liang, X., Qi, B., Wu, L., Tian, C., et al. Sequential diffusion lan-guage models. arXiv preprint arXiv:2509.24007 , 2025b. Lou, A., Meng, C., and Ermon, S. Discrete diffusion lan-guage modeling by estimating the ratios of the data distri-bution. arXiv preprint arXiv:2310.16834 , 2023. Ma, L., Cui, Y., Han, K., and Wang, Y. Diffusion in diffu-sion: Breaking the autoregressive bottleneck in block dif-fusion models. arXiv preprint arXiv:2601.13599 , 2026. Ma, X., Yu, R., Fang, G., and Wang, X. dkv-cache: The cache for diffusion language models. arXiv preprint arXiv:2505.15781 , 2025. Mostafazadeh, N., Chambers, N., He, X., Parikh, D., Batra, D., Vanderwende, L., Kohli, P., and Allen, J. A corpus and cloze evaluation for deeper understanding of com-monsense stories. In Proceedings of the 2016 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technolo-gies , pp. 839–849, 2016. Nguyen-Tri, Q., Ranjan, M., and Shen, Z. Attention is all you need for kv cache in diffusion llms. arXiv preprint arXiv:2510.14973 , 2025. Nie, S., Zhu, F., Du, C., Pang, T., Liu, Q., Zeng, G., Lin, M., and Li, C. Scaling up masked diffusion models on text. 
+
+arXiv preprint arXiv:2410.18514 , 2024. Ou, J., Nie, S., Xue, K., Zhu, F., Sun, J., Li, Z., and Li, C. Your absorbing discrete diffusion secretly models the conditional distributions of clean data. arXiv preprint arXiv:2406.03736 , 2024. Pannatier, A., Courdier, E., and Fleuret, F. σ-gpts: A new approach to autoregressive models, 2024. Pillutla, K., Swayamdipta, S., Zellers, R., Thickstun, J., Welleck, S., Choi, Y., and Harchaoui, Z. Mauve: Mea-suring the gap between neural text and human text using divergence frontiers. Advances in Neural Information Processing Systems , 34:4816–4828, 2021. Prabhudesai, M., Wu, M., Zadeh, A., Fragkiadaki, K., and Pathak, D. Diffusion beats autoregressive in data-constrained settings. arXiv preprint arXiv:2507.15857 ,2025. Radford, A., Wu, J., Child, R., Luan, D., Amodei, D., Sutskever, I., et al. Language models are unsupervised multitask learners. OpenAI blog , 1(8):9, 2019. Raffel, C., Shazeer, N., Roberts, A., Lee, K., Narang, S., Matena, M., Zhou, Y., Li, W., and Liu, P. J. Exploring the limits of transfer learning with a unified text-to-text transformer. Journal of machine learning research , 21 (140):1–67, 2020. Ren, H., Stewart, R., Song, J., Kuleshov, V., and Ermon, S. Learning with weak supervision from physics and data-driven constraints. AI Magazine , 39(1):27–38, 2018. Sahoo, S. S., Gokaslan, A., De Sa, C., and Kuleshov, V. Diffusion models with learned adaptive noise. arXiv preprint arXiv:2312.13236 , 2023. 11 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+Sahoo, S. S., Arriola, M., Schiff, Y., Gokaslan, A., Marro-quin, E., Chiu, J. T., Rush, A., and Kuleshov, V. Simple and effective masked diffusion language models. arXiv preprint arXiv:2406.07524 , 2024. Sahoo, S. S., Deschenaux, J., Gokaslan, A., Wang, G., Chiu, J., and Kuleshov, V. The diffusion duality. arXiv preprint arXiv:2506.10892 , 2025a. Sahoo, S. S., Yang, Z., Akhauri, Y., Liu, J., Singh, D., Cheng, Z., Liu, Z., Xing, E., Thickstun, J., and Vah-dat, A. Esoteric language models. arXiv preprint arXiv:2506.01928 , 2025b. Schiff, Y., Sahoo, S. S., Phung, H., Wang, G., Boshar, S., Dalla-torre, H., de Almeida, B. P., Rush, A., Pierrot, T., and Kuleshov, V. Simple and controllable uniform discrete diffusion language models. In The Thirteenth International Conference on Learning Representations ,2025. URL https://openreview.net/forum? id=i5MrJ6g5G1 .Schiff, Y., Belhasin, O., Uziel, R., Wang, G., Arriola, M., Turok, G., Elad, M., and Kuleshov, V. Learn from your mistakes: Self-correcting masked diffusion models. arXiv preprint arXiv:2602.11590 , 2026. See, A., Liu, P. J., and Manning, C. D. Get to the point: Summarization with pointer-generator networks. In Pro-ceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pp. 1073–1083, Vancouver, Canada, July 2017. Asso-ciation for Computational Linguistics. doi: 10.18653/ v1/P17-1099. URL https://www.aclweb.org/ anthology/P17-1099 .Seo, Y., Lee, D., Kim, J., and Yeo, J. Fast and fluent dif-fusion language models via convolutional decoding and rejective fine-tuning. arXiv preprint arXiv:2509.15188 ,2025. Shen, T., Peng, H., Shen, R., Fu, Y., Harchaoui, Z., and Choi, Y. Film: Fill-in language models for any-order generation. arXiv preprint arXiv:2310.09930 , 2023. Shi, J., Han, K., Wang, Z., Doucet, A., and Titsias, M. Simplified and generalized masked diffusion for discrete data. In The Thirty-eighth Annual Conference on Neural Information Processing Systems , 2024. URL https: //openreview.net/forum?id=xcqSOfHt4g .Shih, A., Sadigh, D., and Ermon, S. Training and in-ference on any-order autoregressive models the right way. In Oh, A. H., Agarwal, A., Belgrave, D., and Cho, K. (eds.), Advances in Neural Information Processing Systems , 2022. URL https://openreview.net/ forum?id=VMU-hMsonit .Shu, Y., Tian, Y., Xu, C., Wang, Y., and Chen, H. Deferred commitment decoding for diffusion language models with confidence-aware sliding windows. arXiv preprint arXiv:2601.02076 , 2026. Sohl-Dickstein, J., Weiss, E., Maheswaranathan, N., and Ganguli, S. Deep unsupervised learning using nonequi-librium thermodynamics. In International conference on machine learning , pp. 2256–2265. PMLR, 2015. Song, Y. and Ermon, S. Generative modeling by estimating gradients of the data distribution. Advances in neural information processing systems , 32, 2019. Sun, H., Yu, L., Dai, B., Schuurmans, D., and Dai, H. Score-based continuous-time discrete diffusion models. arXiv preprint arXiv:2211.16750 , 2022. Turok, G., De Sa, C., and Kuleshov, V. Duel: Exact likeli-hood for masked diffusion via deterministic unmasking. 
+
+arXiv preprint arXiv:2603.01367 , 2026. Uria, B., Murray, I., and Larochelle, H. A deep and tractable density estimator. In International Conference on Ma-chine Learning , pp. 467–475. PMLR, 2014. Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., Kaiser, Ł., and Polosukhin, I. At-tention is all you need. Advances in neural information processing systems , 30, 2017. Wang, G., Schiff, Y., Sahoo, S. S., and Kuleshov, V. Re-masking discrete diffusion models with inference-time scaling. arXiv preprint arXiv:2503.00307 , 2025a. Wang, G., Turok, G., Schiff, Y., Arriola, M., and Kuleshov, V. d2: Improved techniques for training reasoning diffu-sion language models. arXiv preprint arXiv:2509.21474 ,2025b. Wang, Y., Schiff, Y., Gokaslan, A., Pan, W., Wang, F., De Sa, C., and Kuleshov, V. InfoDiffusion: Repre-sentation learning using information maximizing diffu-sion models. In Krause, A., Brunskill, E., Cho, K., Engelhardt, B., Sabato, S., and Scarlett, J. (eds.), Pro-ceedings of the 40th International Conference on Ma-chine Learning , volume 202 of Proceedings of Machine Learning Research , pp. 36336–36354. PMLR, 23–29 Jul 2023. URL https://proceedings.mlr.press/ v202/wang23ah.html .Wang, Z., Shi, J., Heess, N., Gretton, A., and Titsias, M. K. Learning-order autoregressive models with ap-plication to molecular graph generation. arXiv preprint arXiv:2503.05979 , 2025c. 12 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+Wu, C., Zhang, H., Xue, S., Liu, Z., Diao, S., Zhu, L., Luo, P., Han, S., and Xie, E. Fast-dllm: Training-free acceler-ation of diffusion llm by enabling kv cache and parallel decoding. arXiv preprint arXiv:2505.22618 , 2025. Wu, T., Fan, Z., Liu, X., Zheng, H.-T., Gong, Y., Jiao, J., Li, J., Guo, J., Duan, N., Chen, W., et al. Ar-diffusion: Auto-regressive diffusion model for text generation. Advances in Neural Information Processing Systems , 36:39957– 39974, 2023a. Wu, T., Fan, Z., Liu, X., Zheng, H.-T., Gong, Y., ye-long shen, Jiao, J., Li, J., zhongyu wei, Guo, J., Duan, N., and Chen, W. AR-diffusion: Auto-regressive dif-fusion model for text generation. In Thirty-seventh Conference on Neural Information Processing Systems ,2023b. URL https://openreview.net/forum? id=0EG6qUQ4xE .Zheng, K., Chen, Y., Mao, H., Liu, M.-Y., Zhu, J., and Zhang, Q. Masked diffusion models are secretly time-agnostic masked models and exploit inaccurate categori-cal sampling. arXiv preprint arXiv:2409.02908 , 2024. 13 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+## Contents 
+
+1 Introduction 12 Background 2
+
+2.1 Discrete Diffusion Models . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 22.2 Block Diffusion Language Modeling . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 2
+
+3 Set Diffusion 3
+
+3.1 A Probabilistic Model for Set Diffusion . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 33.2 Set Diffusion Architecture . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 43.3 Training . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 43.4 Inference . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+
+4 Interpolating Between Token Orderings 5
+
+4.1 Token Ordering via Position-Dependent Schedules . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 54.2 Position-Offset Schedules . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 54.3 Properties . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+
+5 Sliding-Window Set Diffusion Language Models (SW-SetDLMs) 6
+
+5.1 Probabilistic Model . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 65.2 Architecture . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 65.3 Training . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 65.4 Inference . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+
+6 Experiments 7
+
+6.1 Mathematical Reasoning . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 76.2 Infilling . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 86.3 Summarization . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 86.4 Unconditional Sampling and Likelihood Estimation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 86.5 Ablations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+
+7 Related Work, Discussion, and Conclusion 8A Latent-Order NELBO for Set Factorization 16 B Relating the Set Diffusion and Masked Diffusion NELBO 16 C Relating the Block Diffusion and Set Diffusion NELBO 17 D Relating the Set Diffusion and AO-ARM NELBO 17 
+
+14 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+E Multivariate Masked Diffusion NELBO 18 
+
+E.1 Diffusion NELBO Depends on Multivariate Noise Schedules . . . . . . . . . . . . . . . . . . . . . . . . 19 
+
+F Sliding-Window Set Diffusion NELBO Tightness 19 G Comparison with Related Language Modeling Paradigms 20 H Tuning Position-Offset Schedules 20 I Expected Inference Prediction Budget 22 J Sampling Generation Trajectories from Position-Offset Schedules 23 K Specialized Attention Masks 23 
+
+K.1 Gradient Variance Estimator . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24 
+
+L Experimental Details 25 
+
+L.1 Mathematical Reasoning . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 25 L.2 Summarization . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 26 L.3 Likelihood Estimation and Unconditional Generation . . . . . . . . . . . . . . . . . . . . . . . . . . . . 26 L.4 Infilling . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 27 
+
+M Perplexities on OpenWebText 27 N Sample Generations 28 
+
+N.1 Infilling . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 28 N.1.1 SW-SetDLM . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 28 N.1.2 BD3LM . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 28 N.1.3 MDLM . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 29 N.1.4 AR . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 29 N.2 Reasoning . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 30 N.2.1 SW-SetDLM . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 30 N.2.2 BD3LM . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 33 N.2.3 AR . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 36 N.2.4 MDLM . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 37 15 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+## A. Latent-Order NELBO for Set Factorization 
+
+We derive a latent-order NELBO for autoregressive factorizations over token sets (defined in Def. 3.1): 
+
+− log pθ (x) = − log X
+
+> σ
+
+pθ (x, σ ) (11) 
+
+= − log X
+
+> σ
+
+q(σ | x) pθ (x, σ )
+
+q(σ | x)= − log Eσ∼q(·| x)
+
+ pθ (x, σ )
+
+q(σ | x)
+
+
+
+≤ − Eσ∼q(·| x) [log pθ (x, σ ) − log q(σ | x)] = −Eσ∼q(·| x) [log pθ (x | σ) + log pθ (σ) − log q(σ | x)] = −Eσ∼q(·| x)
+
+" NX
+
+> n=1
+
+log pθ (xσn | x<σ n )
+
+#
+
++ DKL [q(σ | x) ∥ pθ (σ)] (12) Under the assumption that orderings are independent of the data x and model parameters θ, we accordingly choose the prior 
+
+p(σ) ≡ q(σ), and the KL term vanishes: 
+
+− log pθ (x) ≤ − Eσ∼q(σ)
+
+" NX
+
+> n=1
+
+log pθ (xσn | x<σ n )
+
+#
+
+(13) The orderings σ may be sampled from an order policy π(σ), such as the position-offset schedules in Section 4.2. Therefore, we choose the variational distribution and the ordering prior to be the same fixed distribution over generation orders where 
+
+q(σ) ≡ π(σ).Set diffusion further models each conditional likelihood pθ (xσn | x<σ n ) using diffusion. If we denote the diffusion NELBO for the n-th token set as − log pθ (xσn | x<σ n ) ≤ L (xσn , x<σ n ; θ) then combining this conditional NELBO with (13) yields 
+
+− log pθ (x) ≤ L SD (x; θ) := Eσ∼πNX
+
+> n=1
+
+L(xσn , x<σ n ; θ). (14) At inference time, the sampler may use a different order policy π(σ), such as a confidence-based or hardware-aware policy, in determining the decoding trajectory. 
+
+## B. Relating the Set Diffusion and Masked Diffusion NELBO 
+
+The any-order autoregressive objective has been shown to be equivalent to the masked diffusion modeling objective (Hoogeboom et al., 2021; Ou et al., 2024) under uniform orderings. Below, we show that we can relate the masked diffusion and any-order autoregressive objective similarly under arbitrary ordering distributions: 
+
+− log pθ (x) ≤ − Eσ∼q
+
+" NX
+
+> n=1
+
+log pθ (xσn | x<σ n )
+
+#
+
+(15) 
+
+= −Eσ∼q N · En∼U ({1,...,N }) log pθ (xσn | x<σ n )= −N · En∼U ({1,...,N })Eσ<n ∼q
+
+X
+
+> k∈σ≥n
+
+q(σn = k | σ<n ) log pθ (xk | x<σ n ) (16) We recover the masked diffusion objective under uniform orderings π(σ) ≡ U ({1, . . . , N }):
+
+− log pθ (x) ≤ − N · En∼U ({1,...,N })Eσ∼q
+
+1
+
+N − n + 1 
+
+X
+
+> k∈σ≥n
+
+log pθ (xk | x<σ n ) (17) 
+
+= −En∼U ({1,...,N })Eσ∼q
+
+11 − n−1
+
+> N
+
+X
+
+> k∈σ≥n
+
+log pθ (xk | x<σ n ) (18) 16 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+where 11− n−1
+
+> N
+
+is a coefficient that normalizes by the number of predicted tokens, equivalent to 11−αt in the MDLM objective, where αt corresponds to the univariate noise schedule. Normalizing by 11− n−1
+
+> N
+
+(the realized prediction ratio) rather than  
+
+> 11−αt
+
+(the expected prediction ratio) reduces variance, since it exactly matches the ratio of predicted tokens in each sample rather than approximating it in expectation. When we design π(σ) to bias toward certain orderings, then q(σn = k | σ<n ) places most of its mass on a small subset of tokens. Thus under high ordering bias, optimizing the masked diffusion objective is inefficient as gradients are computed using the predictions of only a few tokens in a mini-batch (Arriola et al., 2025a). 
+
+## C. Relating the Block Diffusion and Set Diffusion NELBO 
+
+We show that the set diffusion likelihood (2) can recover the block diffusion likelihood (Arriola et al., 2025a). Assume a block-autoregressive factorization over B token blocks. Let Nb denote the number of sets in block index b ∈ { 1, . . . , B }.
+
+− log pθ (x) ≤ − Eσ∼q(·| x)
+
+" NX
+
+> n=1
+
+log pθ (xσn | x<σ n )
+
+#
+
+(19) 
+
+= −
+
+> B
+
+X
+
+> b=1
+
+Eσ∼q(·| x)
+
+" NbX
+
+> n=1
+
+log pθ (xσn | x<σ n , x<b )
+
+#
+
+(20) 
+
+= −
+
+> B
+
+X
+
+> b=1
+
+Nb · Eσ∼q(·| x)En∼U ({1,...,N b}) log pθ (xσn | x<σ n , x<b ) (21) 
+
+= −
+
+> B
+
+X
+
+> b=1
+
+Nb · En∼U ({1,...,N b})Eσ<n ∼q(·| x)
+
+X
+
+> k∈σ≥n
+
+q(σn = k | σ<n ) log pθ (xk | x<σ n , x<b ) (22) 
+
+= −
+
+> B
+
+X
+
+> b=1
+
+En∼U ({1,...,N b})Eσ<n ∼q(·| x)
+
+11 − n−1
+
+> Nb
+
+X
+
+> k∈σ≥n
+
+log pθ (xk | x<σ n , x<b ) (23) where 11− n−1
+
+> Nb
+
+is a coefficient that normalizes by the number of predicted tokens in a block, equivalent to 11−αbt
+
+in the block diffusion objective, where αbt is a univariate noise schedule applied to tokens in the b-th block. Normalizing by 11− n−1
+
+> Nb
+
+(the realized prediction ratio) rather than 11−αbt
+
+(the expected prediction ratio) reduces variance, since it exactly matches the ratio of predicted tokens in each sample rather than approximating it in expectation. 
+
+## D. Relating the Set Diffusion and AO-ARM NELBO 
+
+We show that the singleton-set SW-SetDLM objective recovers the any-order autoregressive modeling (AO-ARM) objective (Uria et al., 2014) when the ordering distribution is uniform over permutations. More generally, it yields a non-uniform AO-ARM objective when π(σ) is allowed to place structured mass on particular generation orders. For singleton token sets where N = L, the set diffusion NELBO in (3) becomes 
+
+− log pθ (x) ≤ L SD (x; θ) := −Eσ∼πLX
+
+> n=1
+
+log pθ (xσn | xσ<n ). (24) Thus, training samples a full ordering over token positions and predicts each token conditioned on the tokens that precede it in that ordering. Prior AO-ARM and masked-diffusion objectives use a masked-diffusion-style estimator that samples an ordering step and averages over the possible next positions (Uria et al., 2014; Hoogeboom et al., 2021; Shih et al., 2022): 
+
+− log pθ (x) ≤ − N En,σ <n 
+
+X
+
+> k∈σ≥n
+
+π(σn = k | σ<n ) log pθ (xk | x<σ n ) (25) Under biased π, this estimator is inefficient: π(σn = k | σ<n ) concentrates on only a few remaining positions, so each update receives gradient signal from a small subset of token predictions. 17 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+## E. Multivariate Masked Diffusion NELBO 
+
+We derive the masked diffusion NELBO under a multivariate noise schedule αt ∈ [0 , 1] L for L tokens. Each αℓt = αℓ(t)
+
+is the noise schedule for the ℓ-th token monotonically decreasing in t corresponding to the probability that the ℓ-th token remains unmasked at time t (Sahoo et al., 2024; Lou et al., 2023). 
+
+− log pθ (x1: L) = − log Eq(z1: L 
+
+> 1: T|x1: L)
+
+pθ (z1: L 
+
+> 1: T
+
+)
+
+q(z1: L 
+
+> 1: T
+
+|x1: L) (26) 
+
+= − log Eq
+
+pθ (z1: LT ) QTt=1 pθ (z1: Lt−1|z1: Lt )
+
+QTt=1 q(z1: Lt |z1: Lt−1) (27) 
+
+≤ Eq
+
+h
+
+DKL (q(z1: LT |x1: L) ∥ pθ (z1: LT )) +
+
+> T
+
+X
+
+> t=2
+
+DKL (q(z1: Lt−1|z1: Lt , x1: L) ∥ pθ (z1: Lt−1|z1: Lt )) 
+
+− log pθ (x1: L|z1: L 
+
+> 1
+
+)
+
+i
+
+(28) We adopt the MDLM NELBO from Sahoo et al. (2024) that simplifies the reverse posterior q(zℓs|zℓt , xℓ) for absorbing state diffusion. Below, we summarize the derivation from Sahoo et al. (2024). We now simplify the diffusion loss term by marginalizing over all values that can be taken by (zℓs, zℓt ) for token ℓ ∈ { 1, . . . , L }, which are (m, m), (xℓ, m), (xℓ, xℓ).We note that the state (m, xℓ) is impossible, because tokens are never unmasked after having been masked in the forward process q.
+
+Case zℓs = m, zℓt = m: Observe that 
+
+log q(zℓs = m|zℓt = m, xℓ)
+
+pθ (zℓs = m|zℓt = m) = log (1 − αs)( αtpθ (m|zℓt ) + (1 − αt)) (1 − αt)( αspθ (m|zℓt ) + (1 − αs)) = 0 (29) where the last equality holds because pθ (m|zℓt ) = 0 .
+
+Case zℓs = xℓ, zℓt = m: Observe that 
+
+log q(zℓs = xℓ|zℓt = m, xℓ)
+
+pθ (zℓs = xℓ|zℓt = m) = log αtpθ (m|zℓt ) + (1 − αt)(1 − αt)pθ (xℓ|zℓt ) = − log pθ (xℓ|zℓt ) (30) where the last equality holds because pθ (m|zℓt ) = 0 .
+
+Case zℓs = xℓ, zℓt = xℓ: The ratio becomes 0 because pθ (zℓs = xℓ|zℓt = xℓ) = q(zℓs = xℓ|zℓt = xℓ, xℓ).
+
+=
+
+> L
+
+Y
+
+> ℓ=1
+
+q(zℓs = x|zℓt = m, xℓ) log 
+
+> L
+
+Y
+
+> ℓ=1
+
+q(zℓs = x|zℓt = m, xℓ)
+
+pθ (zℓs = x|z1: Lt = m) (31) 
+
++
+
+> L
+
+Y
+
+> ℓ=1
+
+q(zℓs = m|zℓt = m, xℓ) log 
+
+> L
+
+Y
+
+> ℓ=1
+
+q(zℓs = m|zℓt = m, xℓ)
+
+pθ (zℓs = x|z1: Lt = m) (32) 
+
+= T
+
+" LX
+
+> ℓ=1
+
+αℓs − αℓt
+
+1 − αℓt
+
+log αℓt pθ (xℓ = m | z1: Lt ) + (1 − αℓt )(1 − αℓt )pθ (xℓ̸ = m | z1: Lt )+ 1 − αℓs
+
+1 − αℓt
+
+log (1 − αℓs)( αℓt pθ (xℓ = m | z1: Lt ) + (1 − αℓt )) (1 − αℓt )( αℓspθ (xℓ = m | z1: Lt ) + (1 − αℓs)) 
+
+#
+
+(33) 
+
+= Et∼(0 ,1] Eq T
+
+" LX
+
+> ℓ=1
+
+αℓs − αℓt
+
+1 − αℓt
+
+log pθ (xℓ | z1: Lt )
+
+#
+
+(34) 
+
+= Et∼(0 ,1] Eq
+
+" LX
+
+> ℓ=1
+
+˙αtℓ
+
+1 − αℓt
+
+log pθ (xℓ | z1: Lt )
+
+#
+
+(35) 18 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+E.1. Diffusion NELBO Depends on Multivariate Noise Schedules 
+
+We will show that the diffusion NELBO below in Eq. 36 is dependent on the noise schedule α1: Lt when it is multi-dimensional. This finding enables us to craft the noise schedule α1: Lt that is a tighter approximation of the true likelihood. To do so, we will write the NELBO as a line integral R ba f (r(t)) · ddt r(t)dt for a vector field f and a trajectory r. We will show that the trajectory r(t) is parameterized by the noise schedule ν(t), and thus the NELBO depends on the noise schedule if it is multi-dimensional as in Gaussian diffusion (Sahoo et al., 2023). 
+
+L∞ 
+
+> NELBO
+
+= Eq
+
+Z t=1 
+
+> t=0
+
+˙αt1: L
+
+1 − α1: Lt
+
+⊙ log pθ (x1: L | z1: Lt ) dt (36) 
+
+= Eq
+
+Z t=1 
+
+> t=0
+
+log pθ (x1: L | z1: Lt ) ⊙ ∇ t[log(1 − α1: Lt )] dt (37) We substitute μθ (zt) = log pθ (x1: L | z1: Lt ), ν(t) = log(1 − α1: Lt ):
+
+L∞ 
+
+> NELBO
+
+= Eq
+
+Z t=1 
+
+> t=0
+
+μθ (zt) ⊙ ∇ tν(t) dt (38) Since ν(t) is monotonically increasing in t, we can express t as an inverse function of ν: t = ν−1(ν(t)) for some ν−1.We perform a change of variables and set ¯μθ (xν(t)) ≡ μθ (xν−1(ν(t)) ). For all t, we can write μt as μν(t) and have 
+
+¯μθ (xν(t)) ≡ μθ (zt). Thus, we can rewrite the NELBO as: 
+
+L∞ 
+
+> NELBO
+
+= Eq
+
+Z t=1 
+
+> t=0
+
+¯μθ (xν(t)) ⊙ ddt ν(t) dt (39) The above NELBO is a line integral with f (r(t)) ≡ ¯μθ (xν(t)) and r(t) ≡ ν(t). Thus, the NELBO is dependent on the noise schedule ν(t) = log(1 − α1: Lt ) and we can design α1: Lt so that the NELBO is a tighter approximation of the true likelihood. 
+
+## F. Sliding-Window Set Diffusion NELBO Tightness 
+
+We will establish Prop. 4.1 by showing that as the decoding width w → 1 
+
+> L
+
+, the NELBO tends to an autoregressive objective. In the limit, this holds true with equality and the NELBO is tight. Let πw denote the ordering distribution induced by the position-offset schedule. Recall that the offsets are evenly spaced and increasing in token index: 
+
+aℓ = ℓ − 1
+
+L − 1 (1 − w), ℓ ∈ { 1, . . . , L }. (40) The reveal time Rℓ for token ℓ is supported on the active generation interval [aℓ, a ℓ + w]. When w = 1 
+
+> L
+
+, the offsets become 
+
+aℓ = ℓ−1 
+
+> L
+
+, and therefore the active generation interval becomes  ℓ−1 
+
+> L
+
+, ℓL
+
+ for token ℓ. Hence, reveal times respect token order Rℓ ≤ Rj for ℓ < j . Further, no two tokens are selected simultaneously since their generation intervals are disjoint. As a result, the sets are singletons, N = L, and the only sampled order is the identity left-to-right order. Starting from the set-diffusion negative log-likelihood in (11), we obtain 
+
+lim 
+
+> w→1/L
+
+(
+
+− log Eσ∼πw
+
+" NY
+
+> n=1
+
+pθ (xσn | x<σ n )
+
+#) 
+
+= − log 
+
+> L
+
+Y
+
+> n=1
+
+pθ (xn | x<n ) (41) 
+
+= −
+
+> L
+
+X
+
+> n=1
+
+log pθ (xn | x<n ). (42) At w = 1 
+
+> L
+
+, the convergence above holds with equality because π1/L is a point mass on the identity singleton order. Thus the SW-SetDLM objective recovers the autoregressive NLL, and the NELBO is tight. 19 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+Interpolating quality Any-length gen. Infilling flexibility Full KV-caching Token-efficient training Autoregression ✓ ✓
+
+Bidirectional masked diffusion  
+
+> (Sahoo et al., 2024; Lou et al., 2023; Shi et al., 2024)
+
+✓
+
+Block diffusion (Arriola et al., 2025a) ✓ ✓
+
+Any-order autoregression  
+
+> (Pannatier et al., 2024; Hoogeboom et al., 2021)
+
+✓ ✓ ✓ ✓
+
+Set diffusion (Ours) ✓ ✓ ✓ ✓ ✓
+
+Table 7. Comparison between set diffusion and related language modeling paradigms. 
+
+## G. Comparison with Related Language Modeling Paradigms 
+
+In Table 7, we provide a concise comparison between set diffusion models and other language modeling paradigms. 
+
+## H. Tuning Position-Offset Schedules 
+
+We compare position-offset ordering schedules with alternative modeling paradigms, such as block diffusion (Arriola et al., 2025a), by controlling for the expected inference prediction budget (Def. 4.2). This quantity corresponds to the expected number of tokens eligible for prediction at a given ordering time, averaged over the generation trajectory. A token is “eligible” at ordering time τ if it has not yet been selected for generation and τ lies in its active generation interval. For a reveal-time variable Rℓ, the probability that the ℓ-th token has not yet been selected is the survival probability 
+
+Pr( Rℓ > τ ) = 1 − αℓτ . Thus, the expected inference prediction budget is: 
+
+¯C =
+
+Z 10
+
+> L
+
+X
+
+> ℓ=1
+
+Pr( Rℓ > τ ) · 1{ ˙αℓτ̸ = 0 } dτ (43) 
+
+=
+
+Z 10
+
+> L
+
+X
+
+> ℓ=1
+
+(1 − αℓτ ) · 1{ ˙αℓτ̸ = 0 } dτ (44) The offset-linear schedule in Eq. 7 tunes generation only through the interval width w. This couples the expected prediction budget to the amount of interval overlap. In particular, for the linear schedule, 
+
+¯C = Lw 
+
+2 , so w = 2 ¯CL . (45) Thus, for small target budgets ¯C, an offset-linear schedule requires narrow active generation intervals, which may limit decoding flexibility. Non-overlapping intervals impose deterministic ordering constraints: if aℓ + w ≤ aj for ℓ < j , then token ℓ is always revealed before token j. Therefore, tuning only w under the offset-linear schedule reduces the amount of overlap between eligible positions, limiting the ordering flexibility available at that fixed budget. In practice, we use a shaped variant of the position-offset schedule. Within each active generation interval, we define 
+
+αℓτ =
+
+
+
+0, τ ≤ aℓ,
+
+ τ −aℓ
+
+> w
+
+k
+
+, aℓ < τ < a ℓ + w, 
+
+1, τ ≥ aℓ + w, 
+
+(46) where w controls the amount of interval overlap and k > 0 controls the shape of the reveal-time distribution within each interval. Smaller values of k concentrate reveal times closer to the beginning of the active generation interval. 20 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+For this shaped schedule, Eq. 8 has a closed form. For each position ℓ, we make the change of variables 
+
+u = τ − aℓ
+
+w , dτ = w du. (47) When τ = aℓ, we have u = 0 , and when τ = aℓ + w, we have u = 1 . Therefore, 
+
+¯C =
+
+> L
+
+X
+
+> ℓ=1
+
+Z aℓ+waℓ
+
+"
+
+1 −
+
+ τ − aℓ
+
+w
+
+k#
+
+dτ (48) 
+
+= w
+
+> L
+
+X
+
+> ℓ=1
+
+Z 10
+
+(1 − uk)du (49) 
+
+= w
+
+> L
+
+X
+
+> ℓ=1
+
+
+
+u − uk+1 
+
+k + 1 
+
+10
+
+(50) 
+
+= w
+
+> L
+
+X
+
+> ℓ=1
+
+
+
+1 − 1
+
+k + 1 
+
+
+
+(51) 
+
+= Lwk k + 1 . (52) Therefore, for a target prediction budget ¯C and a chosen interval width w, we set 
+
+k = ¯CLw − ¯C , (53) provided that Lw > ¯C. To obtain wider active intervals than the offset-linear schedule, we choose w > 2 ¯C/L , which implies k < 1. This increases overlap between active generation intervals while preserving the same expected prediction budget by setting k = ¯C/ (Lw − ¯C). In this regime, reveal times are biased toward the beginning of each active generation interval, making tokens more likely to be revealed soon after becoming eligible while retaining greater ordering flexibility. Figure 5 illustrates how shaped schedules preserve the same expected prediction budget as offset-linear schedules while enabling more flexible any-order decoding. We choose w by specifying a desired lookahead. The lookahead of token ℓ is the number of later positions j > ℓ that can become eligible for prediction before token ℓ is necessarily generated. A later token j can become eligible before token ℓ’s active generation interval ends whenever aj < a ℓ + w. Since the offsets are evenly spaced, 
+
+aℓ = ℓ − 1
+
+L − 1 (1 − w). (54) The spacing between adjacent offsets is 
+
+∆a = aℓ+1 − aℓ (55) 
+
+= ℓL − 1 (1 − w) − ℓ − 1
+
+L − 1 (1 − w) (56) 
+
+= 1 − wL − 1 . (57) Writing j = ℓ + d, we have aj = aℓ + d∆a. Therefore, 
+
+aℓ+d < a ℓ + w (58) 
+
+aℓ + d∆a < a ℓ + w (59) 
+
+d < w(L − 1) 1 − w . (60) 21 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+For large L, the approximate maximum lookahead induced by interval width w is 
+
+Nov ≈ wL 
+
+1 − w . (61) Equivalently, for a desired lookahead Nov , we choose 
+
+w ≈ Nov 
+
+L + Nov 
+
+, k = ¯CLw − ¯C . (62) token 1 token 2 token 3 token 4   
+
+> w=0.5, k=1.0
+> Expected inference budget = 1.0 token(s) Max lookahead = 2 token(s) 00.5 100.5 1
+> Ordering Priority Pr( Rℓ
+> < τ)
+
+τ  
+
+> w=0.7, k=0.6
+> Expected inference budget = 1.0 token(s) Max lookahead = 3 token(s) 00.5 1
+
+τ
+
+Figure 5. Effect of tuning the position-offset ordering schedule parameters w, k under a fixed expected inference prediction budget ¯C = 1 ,matched to a BD3LM block size of 2. The schedules induce different maximum lookahead values, i.e., the maximum number of later tokens that can become eligible for prediction ahead of a given token. 
+
+## I. Expected Inference Prediction Budget 
+
+Order-agnostic diffusion. Assume a linear noise schedule ατ = τ . For order-agnostic diffusion (e.g., MDLM; Sahoo et al. (2024); Shi et al. (2024); Ou et al. (2024)), the expected number of tokens that can be predicted is: 
+
+¯C =
+
+> L
+
+X
+
+> ℓ=1
+
+Z 10
+
+(1 − τ )dτ = L
+
+2 (63) 
+
+Block diffusion. For block diffusion, let w = S/L denote the normalized generation interval width for block size S. For token position ℓ ∈ { 1, . . . , L }, let 
+
+aℓ =
+
+ ℓ − 1
+
+S
+
+ SL (64) denote the beginning of the corresponding block interval. Assuming a linear reveal schedule within blocks, 
+
+αℓτ = τ − aℓ
+
+w , τ ∈ [aℓ, a ℓ + w], (65) the probability that token ℓ has not yet been selected is 
+
+1 − αℓτ = 1 − τ − aℓ
+
+w . (66) Thus, the expected number of tokens that can be predicted is 
+
+¯CBD (S) = 
+
+> L
+
+X
+
+> ℓ=1
+
+Z aℓ+waℓ
+
+
+
+1 − τ − aℓ
+
+w
+
+
+
+dτ. (67) 22 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+Under the change of variables u = τ − aℓ,
+
+¯CBD (S) = 
+
+> L
+
+X
+
+> ℓ=1
+
+Z w
+
+> 0
+
+
+
+1 − uw
+
+
+
+du (68) 
+
+=
+
+> L
+
+X
+
+> ℓ=1
+
+w
+
+2 =
+
+> L
+
+X
+
+> ℓ=1
+
+S
+
+2L = S
+
+2 . (69) 
+
+Position-offset schedule. For the position-offset ordering schedule, the reveal CDF within the active generation interval 
+
+[aℓ, a ℓ + w] is 
+
+αℓτ =
+
+ τ − aℓ
+
+w
+
+k
+
+. (70) The expected inference prediction budget is therefore 
+
+¯Coffset (w, k ) = 
+
+> L
+
+X
+
+> ℓ=1
+
+Z aℓ+waℓ
+
+"
+
+1 −
+
+ τ − aℓ
+
+w
+
+k#
+
+dτ. (71) Using the closed-form expression derived in (52), we obtain 
+
+¯Coffset (w, k ) = Lwk k + 1 . (72) 
+
+## J. Sampling Generation Trajectories from Position-Offset Schedules 
+
+We sample the ordering trajectories used during training by sampling a generation time for each token, inspired by the first-hitting sampler (Zheng et al., 2024). The sampled generation times induce a permutation over token positions, which determines the order in which singleton token sets are predicted during training. For each token position ℓ ∈ { 1, . . . , L }, let Rℓ ∈ [aℓ, a ℓ + w] denote the first ordering time at which token ℓ is selected. We use the position-offset ordering schedule, where αℓτ denotes the probability that the ℓ-th token has been revealed by ordering time τ . Hence, the generation-time CDF for τ ∈ [aℓ, a ℓ + w] is: 
+
+Pr( Rℓ ≤ τ ) = αℓτ (73) 
+
+=
+
+ τ − aℓ
+
+w
+
+k
+
+(74) Given uℓ ∼ Uniform(0 , 1) , inverse-CDF sampling gives 
+
+uℓ =
+
+ Rℓ − aℓ
+
+w
+
+k
+
+(75) 
+
+Rℓ = aℓ + w(uℓ)1/k (76) After independently sampling R1, . . . , R L, we obtain the generation order by sorting generation times in ascending order 
+
+σ = argsort( R1, . . . , R L). Thus, tokens with smaller ordering times appear earlier in the generation order. Reveal times can also be rounded to a grid with m intervals on [0 , 1] as ˜Rℓ = 1 
+
+> m
+
+arg min i∈{ 0,...,m } im − Rℓ to induce a position sequence of non-singleton sets, where each set groups together identical rounded reveal times. 
+
+## K. Specialized Attention Masks 
+
+We aim to model conditional probabilities pθ (xσn | zσn 
+
+> t
+
+, x<σ n ) for all position sets σ1, . . . , σ N simultaneously by designing an efficient training algorithm with our transformer backbone. However, modeling all N conditional terms requires processing both the noised sequence zσn 
+
+> t
+
+and the conditional context x<σ n for all token sets. 23 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+Rather than calling the denoising network N times, we process both sequences simultaneously by concatenating them 
+
+xin = xσ1 ⊕ · · · ⊕ xσN ⊕ zσ1 
+
+> t1
+
+⊕ · · · ⊕ zσN 
+
+> tN
+
+as input to a transformer. We update this sequence xin of length 2L tokens using a custom attention mask M ∈ { 0, 1}2L×2L for efficient training. This generalizes the custom attention mask used in block diffusion (Arriola et al., 2025a) to arbitrary-position, arbitrary-length token sets. The full attention mask is composed of four L × L smaller attention masks: 
+
+M =
+
+ MSC 0
+
+MOSC MSD 
+
+
+
+where MSD and MOSC are used to update the representation of xt and MSC is used to update the representation of x.We define these masks as follows: • MSD (Set-diagonal mask): Self-attention mask within noised token sets zσn
+
+> t
+
+[MSD ]ij =
+
+(
+
+1 if i, j are in the same token set 
+
+0 otherwise • MOSC (Offset set-causal mask): Cross-attention to conditional context x<σ n
+
+[MOSC ]ij =
+
+(
+
+1 if j belongs to a token set preceding i
+
+0 otherwise • MSC (Set-causal mask): Attention mask for updating xσn
+
+[MSC ]ij =
+
+(
+
+1 if j belongs to the same token set as i, or a token set before i
+
+0 otherwise 
+
+K.1. Gradient Variance Estimator 
+
+Below, we derive an estimator for gradient variance in SW-SetDLM training. We denote a batch of sequences as X =
+
+x(1) , x(2) , . . . , x(K) for batch size K, with each x(k) iid 
+
+∼ q(x) and x(k,ℓ ) denoting the ℓ-th token for ℓ ∈ { 1, . . . , L }. In set diffusion, we factorize the generation over N token sets. Var X,σ [∇θ LSW-SetDLM (X; θ)] = Var X,σ 
+
+"
+
+1
+
+KL 
+
+> K
+
+X
+
+> k=1
+> N
+
+X
+
+> n=1
+
+∇θ log pθ
+
+
+
+x(k,σ n) | x(k,<σ n)#
+
+(77) 
+
+= 1
+
+KL 
+
+> K
+
+X
+
+> k=1
+> N
+
+X
+
+> n=1
+
+∇θ log pθ (x(k,σ n)|x(k,<σ n)) − ∇ θ L(X; θ) 22
+
+(78) We show that the gradient variance from set diffusion training is lower than that of standard masked diffusion training, which computes gradients using randomly masked tokens (Sahoo et al., 2024; Shi et al., 2024; Ou et al., 2024; Sahoo et al., 2025b; Kim et al., 2025a). In contrast, SW-SetDLMs use all tokens in a batch. The loss for clean tokens C(k) =n
+
+z(k,ℓ ) 
+
+> t(k)
+
+| ℓ ∈ { 1, . . . , L }, z(k,ℓ )
+
+> t(k)
+
+̸ = m
+
+o
+
+is set to 0 following the derivation from (Sahoo et al., 2024; Shi et al., 2024; Ou et al., 2024) (which can be thought of as dropout). Similar to standard dropout, we rescale MDLM NELBO by the inverse percentage of masked tokens LL−|C (k)| so that the gradient estimate remains unbiased. The MDLM gradient variance estimator is expressed as: 24 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding                               
+
+> Var X,t [∇θLMDLM (X;θ)] =LK
+> KX
+> k=1
+> LX
+> ℓ=1
+> ∇θlog pθ(x(k,ℓ )|z(k, ·)
+> t(k))
+> L− |C (k)|− ∇ θL(X;θ)
+> 22
+> =LK
+> KX
+> k=1
+> "
+> |C (k)|∇θL(X;θ)22
+> +X
+> ℓ / ∈C (k)
+> ∇θlog pθ(x(k,ℓ )|z(k, ·)
+> t(k))
+> L− |C (k)|− ∇ θL(X;θ)
+> 22
+> #
+> .(79)
+
+Even though the gradient contributions from masked tokens are appropriately rescaled, the gradient variance induced by clean tokens (i.e. dropout tokens) is non-zero. Thus, the estimator of MDLM gradient variance is lower-bounded by 
+
+> 1
+> KL
+
+PKk=1 |C (k)| ∥∇ θ L(X; θ)∥22.
+
+## L. Experimental Details 
+
+For GSM8K and CNN/DailyMail, we use AdamW with weight decay 1e−5 and (β1, β 2) = (0 .9, 0.98) . For OWT and LM1B, we use AdamW with (β1, β 2) = (0 .9, 0.999) and no weight decay, following Sahoo et al. (2024); Arriola et al. (2025a). We apply gradient clipping with a maximum norm of 1.0. We maintain an exponential moving average (EMA) of model parameters with decay rate 0.9999, and use the EMA model for evaluation. For decoding, we use confidence-based greedy decoding (Nie et al., 2024). For parallel sampling, we use confidence-aware parallel decoding with tuned confidence thresholds (Wu et al., 2025). All reported decoding throughput measurements use inference batch size 1 on a single H100 80GB GPU. For unconditional generation using models trained on OWT and LM1B, throughput is instead measured on four 
+
+RTX A6000 48GB GPUs. 
+
+L.1. Mathematical Reasoning Data For GSM8K, we distill a student model initialized from Qwen/Qwen3-1.7B-Base to support parallel diffusion decoding, following the adaptation approach of Arriola et al. (2025b). Distillation mitigates catastrophic forgetting by training the student on responses generated by a stronger teacher model, aligning the adaptation objective with the teacher’s output distribution. Concretely, we construct the training set by prompting Qwen/Qwen3-32B-Base with each GSM8K training question and using the resulting responses as targets. We construct the validation set analogously by prompting 
+
+Qwen/Qwen3-32B-Base with the GSM8K validation questions and using the resulting responses as validation targets. The prompts are drawn from the main configuration of the GSM8K dataset (Cobbe et al., 2021), downloaded from 
+
+https://huggingface.co/datasets/openai/gsm8k . We preprocess each input by prepending the instruction “Please reason step by step, and put your final answer within $ \boxed {} $. ”. We prepro-cess each target by prepending “ Answer: ” and formatting the final answer as “ $\boxed {} $. ”. Inputs and targets are truncated to a maximum combined length of 1024 tokens. 
+
+Tokenization and Hyperparameters We used the Qwen/Qwen3-1.7B-Base tokenizer. We use all the layers of the pretrained Qwen/Qwen3-1.7B-Base model, which has a hidden size of 2048 and intermediate hidden size of 6144. We train with batch size 1. The learning rate is linearly warmed up for 100 steps to a maximum of 1 e−5 and decayed using a cosine schedule to half the peak value. Models are trained for up to 75k steps with early stopping based on the validation loss to select the model with the best validation perplexity. 
+
+Evaluation Models generate responses with a maximum length of 1024 tokens. Generation is deterministic and uses the same Set Diffusion decoding procedure as above. We stop generations using a boxed-answer regular-expression criterion, with an additional repeating-token guard; runs using the chat-template format additionally stop on the <|im_end|> 
+
+token. Inference is performed using the lm-eval harness library with the ‘flexible match’ criterion, and the same preprocessing is applied to question texts. Solutions are reverted to their original ### <Answer> format. 25 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+In Figure 1, SW-SetDLM is trained with a maximum decoding window of 8 tokens, while block diffusion uses a block size of 4. At evaluation, both methods use a decoding block size of 4; SW-SetDLM supports sliding-window prediction and KV cache updates after every inference step, whereas block diffusion does not. We report zero-shot pass@1 accuracy and inference speed on an H100 80GB GPU over 200 samples, after a 50-sample warmup. For parallel decoding, we tune the confidence threshold over the set {0.6, 0.65 , 0.7, . . . , 0.95 , 0.99 , 1.0}. For MDLM on GSM8K, we use a confidence threshold of 0.9, which we found to yield slightly better accuracy at higher throughput. 
+
+L.2. Summarization Data For this task, we use the CNN/DailyMail dataset version 3.0 (Hermann et al., 2015; See et al., 2017) downloaded from 
+
+https://huggingface.co/datasets/abisee/cnn_dailymail . The samples are preprocessed by adding a prefix to summaries: “ Summary: ”. Inputs are truncated to a maximum length of 512 tokens and targets are truncated to a maximum length of 180 tokens, following the experimental setup of (Lin et al., 2023; Wu et al., 2023b). 
+
+Tokenization and Hyperparameters We use the Qwen/Qwen3-0.6B-Base tokenizer. All models had a hidden size of 256, an intermediate hidden size of 768, and 28 transformer layers, corresponding to 80M parameters. We train with batch size 128. The learning rate is linearly warmed up for 1000 steps to a maximum of 3 e−4. Models are trained for up to 500k steps with early stopping to select the model with the best validation perplexity. 
+
+Evaluation Models generate up to 180 additional tokens. ROUGE scores (Lin, 2004) are computed using the evaluate 
+
+library from HuggingFace. For all CNN/DailyMail models, we apply a repetition penalty of 1.2, require at least 50 
+
+generated tokens, and use an exponential length penalty starting at 80 tokens with decay factor 1.1. Decoding also uses an EOS/stop-string stopping criterion. Finally, for MDLM (Sahoo et al., 2024), we decode semi-autoregressively using a block size of 32. 
+
+L.3. Likelihood Estimation and Unconditional Generation Data We train on OpenWebText (OWT; Gokaslan et al. (2019)) dataset and the One Billion Word dataset (LM1B; Chelba et al. (2014)). For OWT, we reserve the last 100K documents as a validation set. Following Arriola et al. (2025a), we concatenate documents and wrap them to the model context length without padding or truncation, and do not insert [BOS] or [EOS] tokens at the beginning and end of the context to enable arbitrary-length generation. We use a context length of 1024 for OWT and 128 for LM1B. 
+
+Tokenization and Hyperparameters For OWT, we use the gpt2 tokenizer (Radford et al., 2019); for LM1B, we use the bert-base-uncased tokenizer (Devlin et al., 2018). All models have 110M total parameters (excluding token embeddings). For models trained on OWT, we use a batch size of 512 and 300K total gradient updates. For models trained on LM1B, we use a batch size of 512 and 1M total gradient updates. The learning rate was linearly warmed up for 2500 steps to a peak of 3e−4 and held constant thereafter. 
+
+Evaluation For likelihood evaluation, we use a single-sample Monte Carlo estimator over latent variables t, zt, σ . For unconditional generation, we sample 1K sequences from models trained on OWT and report MAUVE scores (Pillutla et al., 2021) against 1K samples from the OWT validation split. To reduce sensitivity to the particular validation subset, we fix each model’s 1K generated samples and compute MAUVE against five fixed random subsets of 1K OWT validation examples, reporting the mean across subsets. We also report average sentence entropy for diversity. For categorical decoding, we sample directly from the model’s predicted token distribution using multinomial sampling. Decoding throughput ( Tput ) is measured in tokens/sec on four RTX A6000 48GB GPUs. We report mean ± standard deviation over 200 post-warmup samples with maximum length L ≤ 1024 , gathered across ranks after 50 warmup examples per rank, using each model’s configured sampling steps. For MAUVE, we use nucleus sampling with p = 0 .95 and repetition penalty 1.05 for SetDLM and BD3LM, and p = 0 .90 with no repetition penalty for AR. Generation stops after at least 128 tokens when the end-of-text confidence exceeds the stopping threshold for 4 consecutive windows of 128 tokens, or otherwise at L = 1024 tokens. 26 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+L.4. Infilling Data We perform infilling evaluation using models trained on OWT, following (Guo & Ermon, 2025; Gong et al., 2025). For this task, we follow Guo & Ermon (2025) and test on 1871 short stories from the ROCStories dataset (Mostafazadeh et al., 2016) downloaded from Shen et al. (2023). Each story contains five sentences. 
+
+Evaluation For each story, we mask either the middle sentence or the middle three sentences and have the model predict the missing span. ROUGE scores (Lin, 2004) are computed using the evaluate library from HuggingFace. We use a repetition-penalty logits processor during generation, with factor 1.2. We record throughput on a single H100 80GB GPU. 
+
+## M. Perplexities on OpenWebText 
+
+Below, we provide the validation perplexities on OpenWebText. When block diffusion and set diffusion have comparable likelihoods, set diffusion achieves 22% faster decoding. MDLM is substantially slower because it lacks KV caching and recomputes the full 1024-token context at every denoising step. 
+
+Table 8. Validation perplexities (PPL; ↓) on OWT for SW-SetDLM trained for 157B tokens. † denotes numbers reported by Arriola et al. (2025a) which are trained for 524B tokens. Decoding throughput ( Tput ) is measured in tokens/sec on four RTX A6000 48GB GPUs. We report mean ± standard deviation over 200 post-warmup samples of maximum length L ≤ 1024 using T = L, gathered across ranks after 50 warmup examples per rank. PPL ( ↓) Tput (↑)AR Transformer † 17.54 96 .7±1.3
+
+Diffusion 
+
+SEDD † ≤ 24.10 -MDLM † ≤ 22.98 7.5±0.01 
+
+AR+Diffusion Hybrid 
+
+BD3LM † S = 16 ≤ 23.34 80 .2±0.6
+
+SW-SetDLM S ≤ 8 ≤ 22.42 97 .9±1.6
+
+27 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+Table 9. Test perplexities (PPL; ↓) of models trained on 65B tokens on LM1B. Decoding throughput ( Tput ) is measured in tokens/sec on four RTX A6000 48GB GPUs. We report mean ± standard deviation over 200 post-warmup samples of length L = 128 using T = L,gathered across ranks after 50 warmup examples per rank. Best diffusion value is bolded . Models use 110M params., except those denoted by †: Transformer-X Base uses 0.5B params and D3PM (absorb) uses 70M params. Model PPL ( ↓) Tput (↑)
+
+Autoregressive 
+
+Transformer-X Base † (Dai et al., 2019) 23.5 -Transformer (Sahoo et al., 2024) 22.83 120 .1±1.4
+
+Diffusion 
+
+D3PM † (absorb) (Austin et al., 2021) ≤ 82.34 -SEDD (Lou et al., 2023) ≤ 32.68 -MDLM (Sahoo et al., 2024) ≤ 31.78 ≥37 .7±0.3
+
+UDLM (Schiff et al., 2025) ≤ 36.71 -Duo (Sahoo et al., 2025a) ≤ 33.68 -
+
+AR+Diffusion Hybrid 
+
+BD3LM S = 16 (Arriola et al., 2025a) ≤ 30.60 ≥70 .4±0.8
+
+S = 8 ≤ 28.95 ≥75 .0±0.8
+
+S = 4 ≤ 28.23 ≥76 .9±1.2
+
+SW-SetDLM ( Ours ) S ≤ 32 ≤ 31.78 ≥92 .8±0.9
+
+S ≤ 16 ≤ 29 .90 ≥96 .7±1.4
+
+S ≤ 8 ≤ 27.83 ≥98 .5±1.6
+
+## N. Sample Generations 
+
+N.1. Infilling 
+
+N.1.1. SW-S ET DLM 
+
+Infill 1 sentence 
+
+One day I wanted to cook a nice dinner for my family. I decided to cook spaghetti. I made it with some olive oil, but after a while, I turned the stove on too high. The sauce burned and stuck to the bottom of the pan. Ground truth: I boiled the noodles and put the sauce in a pot on the stove. 
+
+Infill 3 sentences 
+
+One day I wanted to cook a nice dinner for my family. It was not very good, but that’s what happened with this one time recipe, because I just couldn’t make it. The sauce burned and stuck to the bottom of the pan. Ground truth: I decided to cook spaghetti. I boiled the noodles and put the sauce in a pot on the stove. I turned the stove on too high. 
+
+N.1.2. BD3LM 
+
+Infill 1 sentence 
+
+One day I wanted to cook a nice dinner for my family. I didn’t want to do it again, but this time I decided to cook spaghetti. I turned the stove on too high. The sauce burned and stuck to the bottom of the pan. Ground truth: I boiled the noodles and put the sauce in a pot on the stove. 
+
+28 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+Infill 3 sentences 
+
+One day I wanted to cook a nice dinner for my family. One day I wanted to cook anice meal for my family. I was in love with this dish, but it wasn’t always easy. The sauce burned and stuck to the bottom of the pan. Ground truth: I decided to cook spaghetti. I boiled the noodles and put the sauce in a pot on the stove. I turned the stove on too high. 
+
+N.1.3. MDLM 
+
+Infill 1 sentence 
+
+One day I wanted to cook a nice dinner for my family. I decided to cook spaghetti. I cooked it in an oven with some pasta. When I finished cooking, Iturned the stove on too high. The sauce burned and stuck to the bottom of the pan. Ground truth: I boiled the noodles and put the sauce in a pot on the stove. 
+
+Infill 3 sentences 
+
+One day I wanted to cook a nice dinner for my family. I had no idea how to make this recipe but it was pretty simple, so I took a large frying pan and put some oil in it. The sauce burned and stuck to the bottom of the pan. Ground truth: I decided to cook spaghetti. I boiled the noodles and put the sauce in a pot on the stove. I turned the stove on too high. 
+
+N.1.4. AR 
+
+Infill 1 sentence 
+
+One day I wanted to cook a nice dinner for my family. I decided to cook spaghetti. It was the perfect meal, but it wasn’t what we had I turned the stove on too high. The sauce burned and stuck to the bottom of the pan. Ground truth: I boiled the noodles and put the sauce in a pot on the stove. 
+
+Infill 3 sentences 
+
+One day I wanted to cook a nice dinner for my family. I was in the middle of cooking and had just finished eating some rice, which is what we were going to eat together. My husband The sauce burned and stuck to the bottom of the pan. Ground truth: I decided to cook spaghetti. I boiled the noodles and put the sauce in a pot on the stove. I turned the stove on too high. 
+
+29 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+N.2. Reasoning 
+
+N.2.1. SW-S ET DLM For maximum training window size S ≤ 8:
+
+Question: Every day, Wendi feeds each of her chickens three cups of mixed chicken feed, containing seeds, mealworms and vegetables to help keep them healthy. She gives the chickens their feed in three separate meals. In the morning, she gives her flock of chickens 15 cups of feed. In the afternoon, she gives her chickens another 25 cups of feed. How many cups of feed does she need to give her chickens in the final meal of the day if the size of Wendi’s flock is 20 chickens? Answer: 
+
+We are given the following: - Wendi has **20 chickens**. - Each chicken gets **3 cups** of feed **every day**. - The feed is divided into **three meals**: - **Morning**: 15 cups - **Afternoon**: 25 cups - **Final meal**: ?---### Step 1: Total feed needed per day Each chicken gets 3 cups of feed per day, and there are 20 chickens: 20 chickens x 3 cups/chicken = 60 cups of feed ---### Step 2: Total feed given in the first two meals 15 cups (morning) + 25 cups (afternoon) = 40 cups ---### Step 3: Remaining feed for the final meal 60 cups (total) - 40 cups (first meals) = #### 20 
+
+30 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+For maximum training window size S ≤ 16 :
+
+Question: Every day, Wendi feeds each of her chickens three cups of mixed chicken feed, containing seeds, mealworms and vegetables to help keep them healthy. She gives the chickens their feed in three separate meals. In the morning, she gives her flock of chickens 15 cups of feed. In the afternoon, she gives her chickens another 25 cups of feed. How many cups of feed does she need to give her chickens in the final meal of the day if the size of Wendi’s flock is 20 chickens? Answer: 
+
+We are told: - Wendi has **20 chickens**. - Each chicken gets **3 cups** of feed **every day**. - The feed is divided into **3 meals**: - **Morning**: 15 cups - **Afternoon**: 25 cups - **Final meal**: ?---### Step 1: Total feed needed per day Each of the 20 chickens gets 3 cups of feed: 20 chickens x 3 cups/chicken = 60 cups/day ---### Step 2: Total feed given in the morning and afternoon 15 cups (morning) + 25 cups (afternoon) = 40 cups ---### Step 3: Feed needed for the final meal 60 cups (total) - 40 cups (mor and afternoon) = #### 20 
+
+31 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+For maximum training window size S ≤ 32 :
+
+Question: Every day, Wendi feeds each of her chickens three cups of mixed chicken feed, containing seeds, mealworms and vegetables to help keep them healthy. She gives the chickens their feed in three separate meals. In the morning, she gives her flock of chickens 15 cups of feed. In the afternoon, she gives her chickens another 25 cups of feed. How many cups of feed does she need to give her chickens in the final meal of the day if the size of Wendi’s flock is 20 chickens? 
+
+Answer: We are told that: - Wendi has **20 chickens**. - Each chicken gets **3 cups** of feed **3 different meals**. - The feed is divided into **3 equal meals**. - In the **morning**, she gives **15 cups**. - In the **afternoon**, she gives **25 cups**. - We are to find how many cups of feed are needed in the **final meal**. ---### Step 1: Total feed given in the morning and afternoon 15 cups (morning) + 25 cups (afternoon) = 40 cups ---### Step 2: Total feed needed for 20 chickens Each chicken gets 3 cups, so: 20 chickens x 3 cups/chicken = 60 cups ---### Step 3: Subtract the feed already given 60 cups (total) - 40 cups (used) = #### 20 
+
+32 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+N.2.2. BD3LM For block size S = 4 :
+
+Question: Every day, Wendi feeds each of her chickens three cups of mixed chicken feed, containing seeds, mealworms and vegetables to help keep them healthy. She gives the chickens their feed in three separate meals. In the morning, she gives her flock of chickens 15 cups of feed. In the afternoon, she gives her chickens another 25 cups of feed. How many cups of feed does she need to give her chickens in the final meal of the day if the size of Wendi’s flock is 20 chickens? Answer: 
+
+Let's break this down step by step: ---### **Step 1: Total feed needed per day** Wendi feeds **3 cups of feed per chicken per day**. She has **20 chickens**, so: 20 chickens x 3 cups per chicken = 60 cups per day ---### **Step 2: Feed already given in the morning** She gives **15 cups** in the morning. ---### **Step 3: Feed already given in the afternoon** She gives **25 cups** in the afternoon. ---### **Step 4: Total feed given so far** 15 cups (morning) + 25 cups (afternoon) = 40 cups ---### **Step 5: Remaining feed for the final meal** 60 cups (total) - 40 cups (given) = #### 20 
+
+33 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+For block size S = 8 :
+
+Question: Every day, Wendi feeds each of her chickens three cups of mixed chicken feed, containing seeds, mealworms and vegetables to help keep them healthy. She gives the chickens their feed in three separate meals. In the morning, she gives her flock of chickens 15 cups of feed. In the afternoon, she gives her chickens another 25 cups of feed. How many cups of feed does she need to give her chickens in the final meal of the day if the size of Wendi’s flock is 20 chickens? Answer: 
+
+We are told: - Wendi has **20 chickens**. - Each chicken receives **3 cups of feed per day**. - The feed is given in **three meals**: - **Morning**: 15 cups - **Afternoon**: 25 cups - **Final meal**: ?---### Step 1: Total feed needed for 20 chickens Each chicken gets 3 cups of feed per day: 20 chickens x 3 cups per chicken = 60 cups per day ---### Step 2: Total feed given in the morning and afternoon 15 cups + 25 cups = 40 cups ---### Step 3: Total feed needed for the final meal 60 cups - 40 cups = #### 20 
+
+34 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+For block size S = 16 :
+
+Question: Every day, Wendi feeds each of her chickens three cups of mixed chicken feed, containing seeds, mealworms and vegetables to help keep them healthy. She gives the chickens their feed in three separate meals. In the morning, she gives her flock of chickens 15 cups of feed. In the afternoon, she gives her chickens another 25 cups of feed. How many cups of feed does she need to give her chickens in the final meal of the day if the size of Wendi’s flock is 20 chickens? Answer: 
+
+We are told: - Wendi feeds **3 cups of feed per chicken**. - She has **20 chickens**. - She gives the feed in **three meals**: - **Morning**: 15 cups - **Afternoon**: 25 cups - **Final meal**: We need to find how many cups of feed she needs to give the **chickens in the final meal**. ---### Step 1: Total feed needed for 20 chickens Each chicken gets 3 cups of feed so: 20 chickens x 3 cups/chicken = 60 cups ---### Step 2: Total feed given in first two meals 15 cups (mor) + 25 cups (afternoon) = 40 cups ---### Step 3: Total feed needed in the final meal 60 cups (total) - 40 cups (first two meals) = #### 20 
+
+35 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+N.2.3. AR 
+
+Question: Every day, Wendi feeds each of her chickens three cups of mixed chicken feed, containing seeds, mealworms and vegetables to help keep them healthy. She gives the chickens their feed in three separate meals. In the morning, she gives her flock of chickens 15 cups of feed. In the afternoon, she gives her chickens another 25 cups of feed. How many cups of feed does she need to give her chickens in the final meal of the day if the size of Wendi’s flock is 20 chickens? Answer: 
+
+Let's break this down step by step: ### Step 1: Total feed given in the morning Wendi gives **15 cups** of feed in the morning. ### Step 2: Total feed given in the afternoon She gives **25 cups** of feed in the afternoon. ### Step 3: Total feed given so far 15 cups + 25 cups = 40 cups ### Step 4: Total feed needed for the day Wendi has **20 chickens**, and each chicken gets **3 cups** of feed per day: 20 chickens x 3 cups/chicken = 60 cups ### Step 5: Feed needed in the final meal 60 cups - 40 cups = #### 20 
+
+36 Set Diffusion: Interpolating Token Orderings Between Autoregression and Diffusion for Fast and Flexible Decoding 
+
+N.2.4. MDLM 
+
+Question: Every day, Wendi feeds each of her chickens three cups of mixed chicken feed, containing seeds, mealworms and vegetables to help keep them healthy. She gives the chickens their feed in three separate meals. In the morning, she gives her flock of chickens 15 cups of feed. In the afternoon, she gives her chickens another 25 cups of feed. How many cups of feed does she need to give her chickens in the final meal of the day if the size of Wendi’s flock is 20 chickens? 
+
+Answer: Let's break this down step by step. ---### **Step 1: Total eggs per day** Janet’s ducks lay **16 eggs per day**. ---### **Step 2: Eggs eaten for breakfast** Janet she eats **3 eggs for breakfast every morning**. So, she eats **3 eggs per day**. ---### **Step 3: Eggs eaten for muffins** Janet she bakes **4 muffins for her friends every day with four**. So, she bakes **4 eggs per day**. ---### **Step 4: Total eggs eaten** Total eggs eaten = Breakfastfast + Muffins + Remaining eggs Total eggs eaten = 3 + 4 + 4 = 11 eggs eaten ---### **Step 5: Remaining eggs** Janet’s ducks lay **16 eggs per day**, and she eats **11 eggs eaten**. Remaining eggs = 16 - 11 = 5 eggs remaining ---### **Step 6: Selling the remaining eggs** She sells the **remaining eggs** at the farmers' market for **\$2 per duck egg**. So, she sells **\$10 per day**. ---### **Step 7: Total money made** She sells **\$10 per day**, and she sells **5 remaining eggs**. Total money made = 10 \times 5 = 50 dollars ... 
+
+37

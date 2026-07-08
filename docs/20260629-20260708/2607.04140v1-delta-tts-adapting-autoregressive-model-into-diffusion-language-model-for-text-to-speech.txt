@@ -1,0 +1,448 @@
+Title: DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for Text-to-Speech
+
+URL Source: https://arxiv.org/pdf/2607.04140v1
+
+Published Time: Tue, 07 Jul 2026 02:00:00 GMT
+
+Number of Pages: 13
+
+Markdown Content:
+# DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for Text-to-Speech 
+
+Junwon Moon 1 Seungbeom Kim 1 Yejin Lee 1 Hoseong Ahn 1 Sewoong Park 1
+
+Heeseung Kim 2 Kyuhong Shim 1
+
+## Abstract 
+
+Autoregressive (AR) text-to-speech (TTS) mod-els generate discrete speech tokens sequentially, which makes inference slow and can degrade ro-bustness by propagating local errors and hallu-cinations. This limitation stems from their left-to-right AR commitment: each token must be determined before future speech-token context is available. However, such ordering is not an inherent requirement for TTS, as the full input text is available before synthesis. In this paper, we introduce DELTA-TTS , a lightweight LoRA-based adaptation framework that converts a pre-trained AR TTS model into a discrete diffusion language model (dLLM) for confidence-ordered speech-token decoding. To better capture the lo-cal structure of speech, DELTA-TTS incorporates a convolution module that injects local acoustic context, together with a 1/t -weighted training objective and a time-shifted inference schedule that defer low-confidence positions to later steps. Trained on only 585 hours of LibriTTS, DELTA-TTS achieves a 1.75 % WER on Seed-TTS test-en ,outperforming its AR backbone while generating tokens 3.3 × faster. Further analysis shows that DELTA-TTS produces sharper text–speech align-ment, increases overall decoding confidence, and mitigates hallucinations observed in AR genera-tion. 
+
+## 1. Introduction 
+
+Recent autoregressive (AR) text-to-speech (TTS) models synthesize highly natural speech using large language model (LLM) backbones that predict discrete speech tokens (Du et al., 2025; 2024b; Hu et al., 2026; Ye et al., 2025b). De-
+
+> 1
+
+Sungkyunkwan University 2University of Seoul. Correspon-dence to: Kyuhong Shim <khshim@skku.edu>. 
+
+Workshop on Structured Probabilistic Inference & Generative Mod-eling, 43 rd International Conference on Machine Learning , Seoul, South Korea. 2026. Copyright 2026 by the author(s). 
+
+spite their strong performance, AR TTS models have two fundamental limitations. First, token-by-token generation leads to slow inference. This cost is particularly pronounced for speech, which requires far more tokens than text to rep-resent the same content. Second, unidirectional generation conditions each token only on past context. Because neigh-boring speech tokens strongly depend on one another, the AR model’s inability to attend to future context becomes a structural weakness. Formally, AR TTS models the conditional distribution 
+
+P (A | T ) = P (a1, a 2, · · · | T ), where A is a speech-token sequence and T is the input text. AR formulation factorizes this distribution as P (a1 | T ) P (a2 | a1, T ) · · · ,forcing a fixed left-to-right generation order. However, be-cause the entire text T is given in advance, this factorization is not the only option for producing A. Since the learned model can only approximate the target conditional distri-bution, the decoding order affects how errors accumulate. We hypothesize that decoding tokens in order of confidence, rather than in temporal (i.e., left-to-right) order, leads to more stable generation. Interestingly, this hypothesis aligns closely with the generation process of discrete diffusion lan-guage models (dLLMs), which have recently emerged as a promising alternative of AR generation in text domain (Nie et al., 2025; Sahoo et al., 2024; Ye et al., 2025a). In essence, dLLMs generate high-confidence tokens first and progres-sively complete the sequence through iterative refinement. In this paper, we propose DELTA-TTS , a framework that adapts a pretrained AR TTS model into a dLLM, generating speech non-autoregressively while preserving the synthesis quality of the backbone. The conversion process employs parameter-efficient LoRA-based modifications. To better reflect the local and bidirectional structure of speech, we introduce two additional refinements. First, we incorporate a Conformer-style convolution module to model the correla-tions among adjacent speech tokens. Second, we combine a 1/t -weighted training objective with a time-shifted infer-ence schedule so that tokens with insufficient context can be deferred to later decoding steps. With these refinements, the model learns a sharper text–speech alignment and reduces error accumulation caused by committing tokens too early. 1
+
+> arXiv:2607.04140v1 [eess.AS] 5 Jul 2026 DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for TTS
+
+DELTA-TTS architecture  fi gure — palette options  
+
+> Final palette for the paper.
+> Figure 1. Overview of DELTA-TTS. A pretrained AR TTS backbone is converted into a discrete diffusion language model with two adaptations: bidirectional attention and block-wise LoRA with a Conformer-style convolution module.
+
+We validate DELTA-TTS through both empirical evaluation and analysis. First, naively applying an AR-to-dLLM conver-sion designed for text degrades performance substantially, whereas our speech-aware design recovers strong synthe-sis quality. Second, the AR model exhibits low confidence at multiple generation steps, while DELTA-TTS maintains higher confidence throughout the sequence, thereby miti-gating hallucination and generation failures. With only 585 
+
+hours of LibriTTS, DELTA-TTS achieves 1.75% WER on Seed-TTS test-en while generating tokens 3.3× faster. Our contributions are as follows: • We introduce DELTA-TTS, the first method to ex-tend AR-to-dLLM conversion to speech. DELTA-TTS converts a pretrained AR TTS backbone into a non-autoregressive model through a lightweight LoRA-based modification that requires only ~15% additional parameters. • We propose two speech-aware designs that enable gen-eration in confidence order rather than temporal order: a convolution module for locality, and a 1/t -weighted training objective with a time-shifted schedule for de-ferring uncertain tokens to later steps. • We analyze the conversion from two perspectives. First, naive text-domain conversion substantially de-grades performance, which the convolution module restores by sharpening the text–speech alignment. Sec-ond, confidence-ordered decoding maintains high con-fidence across the sequence, mitigating hallucination. 
+
+## 2. Related Work 
+
+2.1. Autoregressive and Non-Autoregressive TTS 
+
+Modern zero-shot AR TTS systems formulate speech syn-thesis as language modeling over discrete tokens and are trained on large speech corpora (Anastassiou et al., 2024; Du et al., 2024a; Wang et al., 2023). A growing line of work initializes their backbones from pretrained text lan-guage models (Du et al., 2025; 2024b; Wang et al., 2025a; Xie et al., 2025). On top of these backbones, these systems attach speech embedding and output projection layers to pro-cess discrete speech tokens. However, this paradigm inherits two limitations from AR language modeling. First, gener-ating an N -token speech sequence demands N sequential forward passes, yielding inference latency linear in the out-put length. Second, attending only to past context prevents the model from exploiting future tokens, despite the strong local dependencies among neighboring speech tokens. NAR TTS models instead generate all tokens within a fixed number of refinement steps, independent of the output length. This parallel formulation is also naturally compatible with bidirectional attention, allowing the model to capture full-sequence context. These methods can be broadly catego-rized into continuous-space approaches (Chen et al., 2025; Eskimez et al., 2024; Le et al., 2023; Lee et al., 2024) and discrete-token approaches (Borsos et al., 2023; Ju et al., 2024; Wang et al., 2024; 2025b). However, as with AR sys-tems, NAR TTS models are typically trained from scratch on large-scale speech corpora, which incurs substantial com-putational cost. 2DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for TTS 
+
+To bridge the gap between these two paradigms, hybrid ap-proaches combining AR and NAR generation have also been explored. For example, DiTAR (Jia et al., 2025) performs autoregressive generation at the chunk level while employ-ing diffusion-based decoding within each chunk. While this enables bidirectional attention within a chunk, generation across chunks remains sequential. As a result, the latency bottleneck is only partially resolved. 
+
+2.2. Discrete Diffusion Language Models 
+
+Diffusion-based language modeling has emerged as a com-petitive NAR paradigm. Early continuous-diffusion ap-proaches (Dieleman et al., 2022; Gong et al., 2022; Han et al., 2023; Li et al., 2022) suffer from scalability issues and information loss when mapping continuous representa-tions back to discrete tokens. Subsequent work has therefore shifted toward discrete diffusion models that operate di-rectly in the token space (Austin et al., 2021; Lou et al., 2023; Sahoo et al., 2024). Specifically, these models learn to predict masked tokens in a partially masked sequence, reversing a forward masking process. At inference time, starting from a fully masked sequence, the model iteratively unmasks tokens in parallel and commits the most confident predictions at each step. Building on this paradigm, recent dLLMs (Arriola et al., 2025; Nie et al., 2025; Ye et al., 2025a; Zhou et al., 2026b) have begun to narrow the quality gap with AR LLMs while retaining the efficiency advantages of parallel generation. 
+
+2.3. AR-to-dLLM Conversion 
+
+A recent line of research has shown that pretrained AR lan-guage models can be converted into dLLMs (Gong et al., 2024; Tae et al., 2025; Wu et al., 2025; Ye et al., 2025a). These methods adapt pretrained AR weights through con-tinual pretraining with a masked diffusion objective (Sahoo et al., 2024). Many of these methods further incorporate a shift operation that preserves the next-token prediction be-havior of the AR model, allowing the pretrained weights to be reused directly for parallel generation. Because this con-version route avoids training from scratch, it substantially improves training efficiency. However, existing approaches have been developed primarily for text language models, and extending AR-to-dLLM conversion to TTS models remains unexplored. 
+
+## 3. Method 
+
+3.1. Overview 
+
+DELTA-TTS adapts a pretrained AR TTS model into a dLLM, while keeping the speech tokenizer and the flow-matching decoder frozen so that the existing zero-shot infer-ence pipeline can be reused without modification. We use CosyVoice3 (Du et al., 2025) as the AR backbone, where a Qwen2-0.5B language model produces a 25 Hz semantic speech token sequence and a flow-matching decoder con-verts these tokens into waveforms. We adapt the backbone through two changes (Figure 1). First, we replace the causal self-attention mask with a bidi-rectional one. Second, we add two block-wise modules, a LoRA and a Conformer-style convolution module, on top of the frozen AR backbone. We detail these changes in Sections 3.2 and 3.3, followed by the training objective in Section 3.4 and the inference procedure in Section 3.5. 
+
+3.2. Bidirectional Adaptation 
+
+Following CosyVoice3’s zero-shot input format, each sam-ple is laid out as 
+
+[SOS , tinst , tprompt , ttarget , TASK , sprompt , starget , EOS ]. (1) Masking is applied only to starget . During training, a random subset of its positions is replaced with the mask token M,and the model learns to recover the original tokens. At infer-ence time, starget is initialized as a sequence of M tokens. The AR backbone processes the resulting sequence under bidirectional self-attention. As a result, each masked target token has direct access to the surrounding speech context, the full transcript, and the prompt speech tokens that carry speaker identity. 
+
+3.3. Lightweight Adapter Architecture 
+
+We freeze the AR backbone and route all adaptation through two trainable modules attached to every transformer block. The first module is LoRA (Hu et al., 2022), which adds low-rank updates to the attention and feed-forward projections of each block while leaving the original weights untouched. Be-cause the pretrained weights are not modified, the backbone retains its language modeling capabilities and speech-token representations while transitioning from causal to bidirec-tional attention. The low-rank updates alone are sufficient to support the newly introduced bidirectional context. In prior AR-to-diffusion adaptation (Gong et al., 2024), the bidirectional mask must be phased in gradually over training to prevent disruption of the fully trained backbone. Our ap-proach removes the need for this mask-annealing schedule. The second module is a Conformer-style convolution mod-ule (Gulati et al., 2020), inserted as a residual branch after each transformer block and composed of a depth-wise con-volution, GLU gating, and a Swish activation. Speech tokens at 25 Hz exhibit strong temporal locality. Neighboring po-sitions encode acoustically similar frames, and most of the structure relevant to prosody and phoneme transitions lies within a short window. Bidirectional self-attention mixes in-3DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for TTS      
+
+> Figure 2. Speed–quality Pareto front on Seed-TTS test-en (both axes log-scale). DELTA-TTS at 16 steps reaches the bottom-left corner, achieving the lowest WER and RTF among all NAR baselines and the AR baseline. The result shows that DELTA-TTS lies on the Pareto front, offering the most favorable speed–quality trade-off among the evaluated systems.
+
+formation across the full sequence but has limited inductive bias toward local context. The convolution module com-pensates for this limitation with an explicit local-mixing operation, so the two mechanisms jointly cover both global structure and short-range continuity. 
+
+3.4. Training 
+
+We follow the masked discrete diffusion formulation (Nie et al., 2025; Sahoo et al., 2024). Let s0 denote the original target speech tokens. For each training example, we sample 
+
+t ∈ (0 , 1) . We then form a partially masked sequence st by replacing each token of s0 with the mask token M indepen-dently with probability t. All other tokens in the input (text, prompt speech, special tokens) remain visible and form the context c. The model is trained to predict the original token at each masked position: 
+
+L(θ) ≜ −Et, s0,st
+
+ 1
+
+t
+
+> L
+
+X
+
+> i=1
+
+1[sit = M] log pθ (si 
+
+> 0
+
+| c, st)
+
+
+
+,
+
+(2) where L is the target speech length and the indicator restricts the loss to masked positions. The 1/t weighting follows from the ELBO of the masked diffusion process (Gong et al., 2024; Nie et al., 2025), amplifying the loss at low masking ratios where the model should predict with high confidence. The AR backbone predicts the token at position i+1 from the hidden state at position i, whereas standard masked diffusion predicts the masked token at the same position 
+
+i. We adopt the shift operation from prior AR-to-dLLM conversions (Gong et al., 2024; Ye et al., 2025a): the hidden state at position i predicts si+1 0 rather than si
+
+> 0
+
+, preserving the AR backbone’s next-token prediction behavior. The mask token M is the only newly added embedding; we initialize it as the mean of all speech-token embeddings and let training refine it. 
+
+3.5. Inference 
+
+We decode starget through T iterations of parallel unmasking. At each iteration, the model predicts every masked posi-tion simultaneously and draws each candidate with top-p
+
+nucleus sampling (Holtzman et al., 2019). We then accept the candidates with the highest confidence, defined as the probability of the sampled token, and keep the rest masked for the next iteration. Instead of unmasking a uniform number of tokens per step, we use a time-shifted schedule that adapts the continuous formulation of (Esser et al., 2024) to the discrete unmask-ing setting. Let cn be the cumulative fraction of tokens unmasked after step n out of T :
+
+cn = μ · n/T 
+
+1 + ( μ − 1) · n/T , (3) where μ > 0 is a time-shifting parameter, and the number of decisions made at step n is kn = ⌊cnL⌋ − ⌊ cn−1L⌋. With 
+
+μ < 1, the schedule unmasks few tokens at early steps and concentrates most decisions toward the end. 4DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for TTS       
+
+> Table 1. Objective evaluation on Seed-TTS test-en . Baseline results are from official checkpoints or papers. Best results are in bold and second-best are underlined. ↑: higher is better; ↓: lower is better.
+
+Type Model Params. Training Data (hours) Seed-TTS test-en 
+
+WER ↓ SIM ↑
+
+– Ground-truth – – 2.14 0.734 AR Seed-TTS N/A N/A 2.25 0.762 
+
+CosyVoice 0.3B 170K Multi. 4.29 0.609 CosyVoice2 0.5B 170K Multi. 2.57 0.659 Spark TTS 0.5B 100K Multi. 1.98 0.573 FireRedTTS2 1.5B 1400K Multi. 1.95 0.665 IndexTTS2 1.5B 55K Emilia 2.23 0.706 VoxCPM 0.5B 1800K Multi. 1.85 0.729 Llasa 1B 250K Multi. 3.22 0.572 CosyVoice3 0.5B 1000K Multi. 2.02 0.692 NAR MaskGCT (50 NFE) 1.1B 100K Emilia 2.62 0.714 E2 TTS (32 NFE) 0.3B 100K Emilia 2.19 0.710 F5-TTS (32 NFE) 0.3B 100K Emilia 2.00 0.647 Ours DELTA-TTS 0.5B+94M 0.585K LibriTTS 1.75 0.688   
+
+> Table 2. Subjective evaluation on Seed-TTS test-en .
+
+Model CMOS ↑ SMOS ↑
+
+Ground-truth 0.00 3.94 CosyVoice3 +0 .03 4.03 DELTA-TTS +0.15 4.30 
+
+This schedule creates a confidence-to-context decoding tra-jectory. When the sequence is still highly masked, the model commits only a few tokens, selecting the most confident positions first. Once committed, these tokens become re-liable anchors that provide local and bidirectional speech context for the remaining masked positions. As decoding proceeds, the accumulated high-confidence tokens help re-solve later, less confident positions under richer context. The time-shifted schedule in Eq. (2) avoids many unreliable early commitments while allowing early confident decisions to support more difficult later ones. 
+
+## 4. Experiments 
+
+4.1. Experimental Setup 
+
+4.1.1. T RAINING AND EVALUATION DATASETS 
+
+We train our AR-to-dLLM conversion on LibriTTS (Zen et al., 2019) (585 h of English speech). We evaluate on two zero-shot TTS benchmarks: Seed-TTS test-en (Anastassiou et al., 2024) (1088 samples) from the Seed-TTS evaluation suite, and the LibriSpeech-PC test-clean Subset B (1127 samples) released by F5-TTS (Chen et al., 2025).                                 
+
+> Table 3. Length-bucketed WER and RTF on Seed-TTS test-en .CV3 indicates CosyVoic3 baseline model.
+> Length WER (%) ↓RTF ↓Speedup ↑
+> CV3 DELTA CV3 DELTA 0–3 s 1.54 1.24 0.479 0.230 2.08 ×
+> 3–5 s 1.74 1.45 0.475 0.144 3.30 ×
+> 5–10 s 2.80 2.60 0.473 0.106 4.46 ×
+> All 2.02 1.75 0.475 0.144 3.30 ×
+
+4.1.2. E VALUATION METRICS 
+
+We report four objective metrics. For Word Error Rate (WER), which assesses generation intelligibility, we follow prior conventions and use a different ASR system per bench-mark: Whisper-Large-V3 (Radford et al., 2023) for Seed-TTS test-en and Faster-Whisper-Large-V3 for LibriSpeech-PC Subset B. For speaker similarity (SIM), we compute the cosine similarity between the generated and prompt speech using a WavLM-large (Chen et al., 2022)-based ECAPA-TDNN model (Desplanques et al., 2020). We adopt UT-MOS (Saeki et al., 2022), a predicted mean opinion score, to assess speech naturalness objectively. We measure in-ference speed as the Real-Time Factor (RTF) on a single NVIDIA A100. For subjective evaluation, we collect the comparative mean opinion score (CMOS, [−3, 3] ) for side-by-side naturalness comparison against human audio, and the similarity mean opinion score (SMOS, [1 , 5] ) for speaker similarity to the prompt audio. 5DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for TTS                                                                 
+
+> Table 4. Objective evaluation on LibriSpeech-PC test-clean (Subset B, 1127 samples). Baseline results are from official checkpoints or papers. Best results are in bold and second-best are underlined. ↑: higher is better; ↓: lower is better.
+> Type Model Params. Training Data (hours) LibriSpeech-PC test-clean
+> WER ↓SIM ↑UTMOS ↑
+> –Ground-truth ––2.23 0.69 4.10 AR CosyVoice 0.3B 170K Multi. 3.59 0.66 4.14 FireRedTTS 0.6B 248K Multi. 2.69 0.47 –DiTAR 0.6B 100K Emilia 2.39 0.67 4.22 CosyVoice3 0.5B 1000K Multi. 1.95 0.69 4.28
+> NAR MaskGCT (50 NFE) 1.1B 100K Emilia 2.72 0.69 3.90 E2 TTS (32 NFE) 0.3B 100K Emilia 2.95 0.69 3.56 F5-TTS (32 NFE) 0.3B 100K Emilia 2.42 0.66 3.88 Ours DELTA-TTS 0.5B+94M 0.585K LibriTTS 2.17 0.69 4.27
+
+4.1.3. B ASELINES 
+
+We compare DELTA-TTS against representative AR and NAR zero-shot TTS systems. AR baselines include Seed-TTS (Anastassiou et al., 2024), CosyVoice (Du et al., 2024a), CosyVoice2 (Du et al., 2024b), Spark TTS (Wang et al., 2025a), FireRedTTS (Guo et al., 2025), FireRedTTS2 (Xie et al., 2025), IndexTTS2 (Zhou et al., 2026a), Llasa (Ye et al., 2025b), VoxCPM (Zhou et al., 2025), DiTAR (Jia et al., 2025), and our base model CosyVoice3 (Du et al., 2025); NAR baselines include MaskGCT (Wang et al., 2024), E2 TTS (Eskimez et al., 2024), and F5-TTS (Chen et al., 2025). For Seed-TTS test-en , baseline numbers are taken from the CosyVoice HuggingFace evaluation page 1
+
+where available, and from the Llasa paper (Ye et al., 2025b) for E2 TTS and Llasa. For LibriSpeech-PC Subset B, baseline numbers are taken from F5-TTS (Chen et al., 2025) and DiTAR (Jia et al., 2025) where available, or measured by us using the released official checkpoints. For CosyVoice3 in particular, we mea-sure WER, SIM, and UTMOS ourselves on both bench-marks using the released checkpoint, to ensure consistency with the rest of the evaluation pipeline. 
+
+4.2. Main Results 
+
+4.2.1. I NTELLIGIBILITY 
+
+On Seed-TTS test-en (Table 1), DELTA-TTS achieves the lowest WER among all compared systems despite training on only 585 h of English speech. On LibriSpeech-PC Subset B (Table 4), DELTA-TTS again achieves a lower WER than every NAR baseline and is second only to the strongest AR system, showing that the conversion preserves the synthesis capability of the pretrained backbone. These results are 
+
+> 1https://huggingface.co/FunAudioLLM/ CosyVoice-300M#evaluation
+
+obtained by training only 94 M parameters on top of the frozen backbone, without retraining the AR weights. 4.2.2. S PEAKER SIMILARITY AND NATURALNESS 
+
+Speaker similarity (SIM) is competitive with leading AR and NAR baselines on both benchmarks, and UTMOS on Subset B is on par with the strongest AR systems, indicat-ing that the parallel paradigm does not degrade perceptual audio quality. Subjective evaluation in Table 2 reinforces this finding. DELTA-TTS is judged more natural than the AR baseline in CMOS ( +0 .15 vs. +0 .03 ) and obtains the highest SMOS ( 4.30 vs. 4.03 for CosyVoice3 and 3.94 for ground truth). 
+
+4.3. Speed–Quality Trade-off 
+
+Figure 2 reports the speed–quality Pareto front on Seed-TTS 
+
+test-en , obtained by sweeping the number of unmasking steps over {4, 8, 16 }. With too few steps the masked po-sitions are under-resolved and WER rises sharply, while quality improves steadily as the step budget grows. At 16 
+
+steps, DELTA-TTS reaches the bottom-left corner of the front, and we adopt this setting as our default. DELTA-TTS then achieves a WER of 1.75% at an RTF of 0.144 , a 3.3×
+
+speedup over the AR baseline, and dominates the NAR base-lines on both axes. RTF is measured on the token-generation stage alone, using a single NVIDIA A100. Table 3 further shows that DELTA-TTS’s fixed unmask-ing budget yields a larger speedup on longer utterances (2.08 × → 4.46 × from < 3 s to ≥ 5 s) while retaining the WER advantage at every length. 
+
+4.4. Ablation Study 
+
+Table 5 breaks down each component of our adaptation. Adding the time-shifted schedule reduces WER over the uniform-schedule baseline, confirming the benefit of defer-6DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for TTS 
+
+Table 5. Ablation of the speech-token LM on Seed-TTS test-en .
+
+Configuration WER (%) ↓ SIM ↑ UTMOS ↑ Trainable 
+
+Naive conversion (LoRA, no Conv, uniform sched.) 3.01 0.574 4.04 35M + Time-shifted schedule 2.59 0.586 4.05 35M + Convolution module ( k=31 ) 1.61 0.584 4.09 94M + Prompt conditioning (GT length) 1.63 0.686 4.01 94M + Prompt conditioning (rule-based length) 1.75 0.688 3.97 94M Full Fine-Tuning 1.97 0.680 4.01 494M KD from CosyVoice3 2.37 0.591 4.05 94M 0                 
+
+> 20
+> 40
+> 60
+> 80
+> speech position
+> CosyVoice3
+> Layer 0 Layer 12 Layer 22
+> 0510 15 20 25
+> text position
+> 0
+> 20
+> 40
+> 60
+> 80
+> speech position
+> DELTA-TTS (Ours)
+> 0510 15 20 25
+> text position
+> 0510 15 20 25
+> text position
+
+(a) Text–speech alignment 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16      
+
+> Unmasking step
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> Attention budget
+> w/o Conv: Text
+> w/ Conv: Text
+> w/o Conv: Speech
+> w/ Conv: Speech
+
+(b) Attention budget of masked tokens 
+
+Figure 3. (a) Text–speech alignment across depth: DELTA-TTS sharpens the middle-layer diagonal and, in the late layer, attends to upcoming text, a pattern unavailable to the causal AR baseline. (b) Per-step attention budget from masked tokens; the convolution module shifts more attention onto neighboring unmasked speech while keeping text attention stable. 
+
+ring uncertain commitments to later steps. The block-wise convolution module further reduces WER by introducing short-range mixing that complements bidirectional attention. Prompt-conditioned training trades a small amount of WER and naturalness for a substantial gain in speaker similarity. Fully unfreezing the backbone yields higher WER despite more parameters, suggesting that the limited 585-hour adap-tation data is insufficient to fine-tune all 494M parameters without overfitting. Parameter-efficient adapters are there-fore preferable in this low-resource setting. A knowledge-distillation baseline that trains the same dLLM to match CosyVoice3’s outputs lags our direct conversion in both WER and SIM, showing that distilling from a teacher caps the student at the teacher’s quality, whereas direct conver-sion can surpass the AR backbone. For the rule-based length variant, we set the target speech-token count to rprompt × Wtarget , where rprompt =
+
+N audio prompt /W prompt denotes the prompt’s audio-to-character rate and W counts characters with reduced weights for whitespace and punctuation. 
+
+4.5. Analysis 
+
+We analyze DELTA-TTS from two angles. We first examine how the conversion reshapes attention over text and speech, and then how confidence-ordered decoding prevents the hallucinations that afflict AR generation. 4.5.1. TEXT –S PEECH ALIGNMENT AND SPEECH -T OKEN 
+
+LOCALITY 
+
+Figure 3(a) shows that DELTA-TTS produces a substantially cleaner text–speech alignment than CosyVoice3, with the middle-layer diagonal sharpening from a noisy blur into a clearly defined line. This sharpening can be traced to the convolution module. Figure 3(b) shows that masked positions concentrate more attention on neighboring unmasked speech tokens while attention to text remains stable, and this strengthened local focus tightens the alignment. Beyond this, the late layer attends to upcoming text, exploiting future context that is structurally inaccessible to the causal AR decoder. 7DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for TTS 0 20 40 60 80 100 120 140 
+
+> Speech-token position (0 = target start)
+> 0.00
+> 0.02
+> 0.04
+> 0.06
+> 0.08
+> 0.10
+> AR confidence on GT token  CosyVoice3 (AR)
+> first 5 positions
+
+(a) AR confidence by token position 0.0 0.1 0.2 0.3 0.4 0.5  
+
+> Per-position confidence at GT token
+> 0
+> 5
+> 10
+> 15
+> 20
+> Density
+> cosy med=0.023
+> DELTA med=0.193
+> CosyVoice3 (AR), n=114k
+> DELTA-TTS (Ours), n=114k
+
+(b) Marginal confidence distribution 
+
+Figure 4. (a) Mean teacher-forced AR confidence on the GT speech token across 1088 Seed-TTS test-en utterances; the first 5 positions sit close to zero. (b) Marginal distribution of per-position confidence at the GT speech token; the AR model’s teacher-forced confidence concentrates near zero, while DELTA-TTS commits at far higher confidence. 
+
+Table 6. Catastrophic hallucination cases on Seed-TTS test-en : CosyVoice3 collapses on both utterances regardless of seed, while DELTA-TTS synthesizes them correctly. “AR start conf” is the mean teacher-forced AR confidence at the first 5 ground-truth speech tokens. “DELTA commit step” is the range of unmasking steps at which DELTA-TTS commits those same first-5 positions. CosyVoice3 ASR transcript DELTA-TTS ASR transcript AR start conf. DELTA commit step “thank you.” “any tutting that is required. . . ” 0.013 7–14 
+
+“thank you.” “she founded the salt lake. . . ” 0.003 5–13 
+
+4.5.2. CONFIDENCE ADVANTAGE AND ROBUSTNESS TO 
+
+AR F AILURE MODES 
+
+Autoregressive decoders must commit each position with-out seeing what comes next, which forces decisions under insufficient evidence and propagates errors. DELTA-TTS re-moves both constraints. Bidirectional attention grants every position access to future context, and confidence-ordered decoding defers the positions that require more context until enough has accumulated. Figure 4(a) plots the AR model’s confidence in the ground-truth (GT) speech token at each position. The first 5 po-sitions sit close to zero: the AR model places almost no probability mass on the GT token at the utterance start, yet must commit these positions from the prompt context alone. DELTA-TTS instead defers them through confidence-ordered decoding (Appendix A.5). Figure 4(b) aggregates these per-position confidences into a marginal distribution. The AR model’s teacher-forced con-fidence concentrates near zero (median 0.023 ), whereas DELTA-TTS commits at far higher confidence (median 
+
+0.193 , 8× higher), with negligible mass near in that region. This confidence advantage has a measurable consequence. Across the 5 random seeds of our sampling stability sweep (Appendix A.2), CosyVoice3 catastrophically fails on the same two utterances in every seed, while DELTA-TTS does not hallucinate (Table 6). Because the AR model must com-mit early speech tokens from the prompt context alone, near-zero confidence at the utterance start is common. AR generation therefore occasionally collapses at these posi-tions, and the failure propagates through the rest of the se-quence. DELTA-TTS instead commits these low-confidence positions only at later unmasking steps, once the bidirec-tional decoder has resolved the surrounding context, and is therefore structurally protected against this failure mode. 
+
+## 5. Conclusion 
+
+We present DELTA-TTS, a lightweight framework that con-verts a pretrained autoregressive TTS model into a discrete diffusion language model with only about 15% added pa-rameters. On top of LoRA, a block-wise convolution module injects the local acoustic context that bidirectional attention captures weakly, and a 1/t -weighted objective with a time-shifted schedule defers low-confidence positions to later steps. Trained on only 585 hours of LibriTTS, DELTA-TTS achieves a 1.75% WER on Seed-TTS test-en , surpassing the 
+
+2.02% of its AR backbone while generating tokens 3.3×
+
+faster. Our analysis attributes these gains to local mixing and to confidence-ordered decoding. The confidence-ordered de-coding defers the positions where the AR model is least confident until sufficient context has accumulated, thereby avoiding the hallucinations and error propagations. These results support our hypothesis that confidence-ordered de-coding is more stable than strictly left-to-right decoding. 8DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for TTS 
+
+## References 
+
+Anastassiou, P., Chen, J., Chen, J., Chen, Y., Chen, Z., Chen, Z., Cong, J., Deng, L., Ding, C., Gao, L., et al. Seed-tts: A family of high-quality versatile speech generation models. 
+
+arXiv preprint arXiv:2406.02430 , 2024. Arriola, M., Gokaslan, A., Chiu, J. T., Yang, Z., Qi, Z., Han, J., Sahoo, S. S., and Kuleshov, V. Block diffusion: Inter-polating between autoregressive and diffusion language models. arXiv preprint arXiv:2503.09573 , 2025. Austin, J., Johnson, D. D., Ho, J., Tarlow, D., and Van Den Berg, R. Structured denoising diffusion models in discrete state-spaces. Advances in neural information processing systems , 34:17981–17993, 2021. Borsos, Z., Sharifi, M., Vincent, D., Kharitonov, E., Zeghi-dour, N., and Tagliasacchi, M. Soundstorm: Efficient par-allel audio generation. arXiv preprint arXiv:2305.09636 ,2023. Chen, S., Wang, C., Chen, Z., Wu, Y., Liu, S., Chen, Z., Li, J., Kanda, N., Yoshioka, T., Xiao, X., et al. Wavlm: Large-scale self-supervised pre-training for full stack speech processing. IEEE Journal of Selected Topics in Signal Processing , 16(6):1505–1518, 2022. Chen, Y., Niu, Z., Ma, Z., Deng, K., Wang, C., JianZhao, J., Yu, K., and Chen, X. F5-tts: A fairytaler that fakes fluent and faithful speech with flow matching. In Pro-ceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pp. 6255–6271, 2025. Desplanques, B., Thienpondt, J., and Demuynck, K. Ecapa-tdnn: Emphasized channel attention, propagation and aggregation in tdnn based speaker verification. arXiv preprint arXiv:2005.07143 , 2020. Dieleman, S., Sartran, L., Roshannai, A., Savinov, N., Ganin, Y., Richemond, P. H., Doucet, A., Strudel, R., Dyer, C., Durkan, C., et al. Continuous diffusion for categorical data. arXiv preprint arXiv:2211.15089 , 2022. Du, Z., Chen, Q., Zhang, S., Hu, K., Lu, H., Yang, Y., Hu, H., Zheng, S., Gu, Y., Ma, Z., et al. Cosyvoice: A scalable multilingual zero-shot text-to-speech synthe-sizer based on supervised semantic tokens. arXiv preprint arXiv:2407.05407 , 2024a. Du, Z., Wang, Y., Chen, Q., Shi, X., Lv, X., Zhao, T., Gao, Z., Yang, Y., Gao, C., Wang, H., et al. Cosyvoice 2: Scalable streaming speech synthesis with large language models. arXiv preprint arXiv:2412.10117 , 2024b. Du, Z., Gao, C., Wang, Y., Yu, F., Zhao, T., Wang, H., Lv, X., Wang, H., Ni, C., Shi, X., et al. Cosyvoice 3: Towards in-the-wild speech generation via scaling-up and post-training. arXiv preprint arXiv:2505.17589 , 2025. Eskimez, S. E., Wang, X., Thakker, M., Li, C., Tsai, C.-H., Xiao, Z., Yang, H., Zhu, Z., Tang, M., Tan, X., et al. E2 tts: Embarrassingly easy fully non-autoregressive zero-shot tts. In 2024 IEEE spoken language technology workshop (SLT) , pp. 682–689. IEEE, 2024. Esser, P., Kulal, S., Blattmann, A., Entezari, R., Müller, J., Saini, H., Levi, Y., Lorenz, D., Sauer, A., Boesel, F., et al. Scaling rectified flow transformers for high-resolution image synthesis. In Forty-first international conference on machine learning , 2024. Gong, S., Li, M., Feng, J., Wu, Z., and Kong, L. Diffuseq: Sequence to sequence text generation with diffusion mod-els. arXiv preprint arXiv:2210.08933 , 2022. Gong, S., Agarwal, S., Zhang, Y., Ye, J., Zheng, L., Li, M., An, C., Zhao, P., Bi, W., Han, J., et al. Scaling diffu-sion language models via adaptation from autoregressive models. arXiv preprint arXiv:2410.17891 , 2024. Gulati, A., Qin, J., Chiu, C.-C., Parmar, N., Zhang, Y., Yu, J., Han, W., Wang, S., Zhang, Z., Wu, Y., et al. Con-former: Convolution-augmented transformer for speech recognition. arXiv preprint arXiv:2005.08100 , 2020. Guo, H.-H., Hu, Y., Shen, F.-Y., Tang, X., Wu, Y.-C., Xie, F.-L., and Xie, K. Fireredtts-1s: An upgraded stream-able foundation text-to-speech system. arXiv preprint arXiv:2503.20499 , 2025. Han, X., Kumar, S., and Tsvetkov, Y. Ssd-lm: Semi-autoregressive simplex-based diffusion language model for text generation and modular control. In Proceed-ings of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 11575–11596, 2023. Holtzman, A., Buys, J., Du, L., Forbes, M., and Choi, Y. The curious case of neural text degeneration. arXiv preprint arXiv:1904.09751 , 2019. Hu, E. J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L., Chen, W., et al. Lora: Low-rank adaptation of large language models. Iclr , 1(2):3, 2022. Hu, H., Zhu, X., He, T., Guo, D., Zhang, B., Wang, X., Guo, Z., Jiang, Z., Hao, H., Guo, Z., et al. Qwen3-tts technical report. arXiv preprint arXiv:2601.15621 , 2026. Jia, D., Chen, Z., Chen, J., Du, C., Wu, J., Cong, J., Zhuang, X., Li, C., Wei, Z., Wang, Y., et al. Ditar: Diffusion trans-former autoregressive modeling for speech generation. 
+
+arXiv preprint arXiv:2502.03930 , 2025. 9DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for TTS 
+
+Ju, Z., Wang, Y., Shen, K., Tan, X., Xin, D., Yang, D., Liu, Y., Leng, Y., Song, K., Tang, S., et al. Naturalspeech 3: Zero-shot speech synthesis with factorized codec and diffusion models. arXiv preprint arXiv:2403.03100 , 2024. Le, M., Vyas, A., Shi, B., Karrer, B., Sari, L., Moritz, R., Williamson, M., Manohar, V., Adi, Y., Mahadeokar, J., et al. Voicebox: Text-guided multilingual universal speech generation at scale. Advances in neural informa-tion processing systems , 36:14005–14034, 2023. Lee, K., Kim, D. W., Kim, J., Chung, S., and Cho, J. Ditto-tts: Diffusion transformers for scalable text-to-speech without domain-specific factors. arXiv preprint arXiv:2406.11427 , 2024. Li, X., Thickstun, J., Gulrajani, I., Liang, P. S., and Hashimoto, T. B. Diffusion-lm improves controllable text generation. Advances in neural information process-ing systems , 35:4328–4343, 2022. Lou, A., Meng, C., and Ermon, S. Discrete diffusion model-ing by estimating the ratios of the data distribution. arXiv preprint arXiv:2310.16834 , 2023. Nie, S., Zhu, F., You, Z., Zhang, X., Ou, J., Hu, J., Zhou, J., Lin, Y., Wen, J.-R., and Li, C. Large language diffusion models. arXiv preprint arXiv:2502.09992 , 2025. Radford, A., Kim, J. W., Xu, T., Brockman, G., McLeavey, C., and Sutskever, I. Robust speech recognition via large-scale weak supervision. In International conference on machine learning , pp. 28492–28518. PMLR, 2023. Saeki, T., Xin, D., Nakata, W., Koriyama, T., Takamichi, S., and Saruwatari, H. Utmos: Utokyo-sarulab sys-tem for voicemos challenge 2022. arXiv preprint arXiv:2204.02152 , 2022. Sahoo, S. S., Arriola, M., Schiff, Y., Gokaslan, A., Marro-quin, E., Chiu, J. T., Rush, A., and Kuleshov, V. Simple and effective masked diffusion language models. Ad-vances in Neural Information Processing Systems , 37: 130136–130184, 2024. Tae, J., Ivison, H., Kumar, S., and Cohan, A. Tess 2: A large-scale generalist diffusion language model. In Pro-ceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) ,pp. 21171–21188, 2025. Wang, C., Chen, S., Wu, Y., Zhang, Z., Zhou, L., Liu, S., Chen, Z., Liu, Y., Wang, H., Li, J., et al. Neural codec language models are zero-shot text to speech synthesizers. 
+
+arXiv preprint arXiv:2301.02111 , 2023. Wang, X., Jiang, M., Ma, Z., Zhang, Z., Liu, S., Li, L., Liang, Z., Zheng, Q., Wang, R., Feng, X., et al. Spark-tts: An efficient llm-based text-to-speech model with single-stream decoupled speech tokens. arXiv preprint arXiv:2503.01710 , 2025a. Wang, Y., Zhan, H., Liu, L., Zeng, R., Guo, H., Zheng, J., Zhang, Q., Zhang, X., Zhang, S., and Wu, Z. Maskgct: Zero-shot text-to-speech with masked generative codec transformer. arXiv preprint arXiv:2409.00750 , 2024. Wang, Y., Zheng, J., Zhang, J., Zhang, X., Liao, H., and Wu, Z. Metis: A foundation speech generation model with masked generative pre-training. arXiv preprint arXiv:2502.03128 , 2025b. Wu, C., Zhang, H., Xue, S., Diao, S., Fu, Y., Liu, Z., Molchanov, P., Luo, P., Han, S., and Xie, E. Fast-dllm v2: Efficient block-diffusion llm. arXiv preprint arXiv:2509.26328 , 2025. Xie, K., Shen, F., Li, J., Xie, F., Tang, X., and Hu, Y. Fireredtts-2: Towards long conversational speech generation for podcast and chatbot. arXiv preprint arXiv:2509.02020 , 2025. Ye, J., Xie, Z., Zheng, L., Gao, J., Wu, Z., Jiang, X., Li, Z., and Kong, L. Dream 7b: Diffusion large language models. 
+
+arXiv preprint arXiv:2508.15487 , 2025a. Ye, Z., Zhu, X., Chan, C.-M., Wang, X., Tan, X., Lei, J., Peng, Y., Liu, H., Jin, Y., Dai, Z., et al. Llasa: Scal-ing train-time and inference-time compute for llama-based speech synthesis. arXiv preprint arXiv:2502.04128 ,2025b. Zen, H., Dang, V., Clark, R., Zhang, Y., Weiss, R. J., Jia, Y., Chen, Z., and Wu, Y. Libritts: A corpus de-rived from librispeech for text-to-speech. arXiv preprint arXiv:1904.02882 , 2019. Zhou, S., Zhou, Y., He, Y., Zhou, X., Wang, J., Deng, W., and Shu, J. Indextts2: A breakthrough in emotionally expres-sive and duration-controlled auto-regressive zero-shot text-to-speech. In Proceedings of the AAAI Conference on Artificial Intelligence , volume 40, pp. 35139–35148, 2026a. Zhou, Y., Zeng, G., Liu, X., Li, X., Yu, R., Wang, Z., Ye, R., Sun, W., Gui, J., Li, K., et al. Voxcpm: Tokenizer-free tts for context-aware speech generation and true-to-life voice cloning. arXiv preprint arXiv:2509.24650 , 2025. Zhou, Z., Chen, L., Tong, H., and Song, D. dllm: Simple diffusion language modeling. arXiv preprint arXiv:2602.22661 , 2026b. 10 DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for TTS 
+
+## A. Appendix 
+
+A.1. Implementation Details 
+
+We train on a single NVIDIA A100 with bfloat16 mixed precision. The LoRA targets the query, key, value, output, gate, up, and down projections of every transformer block, with scaling α=128 . The depth-wise convolution uses kernel size 31 and dropout 0.1. We optimize with AdamW at a constant learning rate of 1×10 −4 after a 2,000 -step linear warmup, with an effective batch size of 16 utterances obtained via gradient accumulation. In total, these adapters introduce 94M trainable parameters (35M from LoRA and 59M from the convolution modules), about 15% on top of the frozen CosyVoice3 pipeline (Qwen2-0.5B LLM and flow-matching decoder). 
+
+A.2. Sampling Stability Sweep 
+
+We evaluate sampling stability by running each model with 5 different random seeds on Seed-TTS test-en (1088 utterances) under the paper-standard recipe (DELTA-TTS: tshift =0 .3). We set top_p =0 .8 for both models, following CosyVoice3’s official sampling configuration. 2
+
+Table 7. Sampling stability on Seed-TTS test-en . Stochastic results are mean ±std over 5 random seeds; greedy is a single deterministic run. 
+
+Configuration WER (%) ↓ SIM ↑ UTMOS ↑
+
+DELTA-TTS, greedy 1.78 0.686 4.006 
+
+DELTA-TTS, stochastic 1.75 ± 0.10 0.688 ± 0.001 3.975 ± 0.005 
+
+CosyVoice3, stochastic 1.99 ± 0.09 0.694 ± 0.001 3.955 ± 0.004 
+
+A.3. Time-Shifted Schedule and 1/t Loss 
+
+We use a time-shifted schedule that allocates more unmasking steps to later stages of decoding, where fewer tokens remain. This aligns with the 1/t loss, which places larger weights on later steps. As shown in Figure 5, the shifted schedule concentrates updates in these later steps, leading to more effective training. 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16          
+
+> Unmasking step
+> 0.0
+> 2.5
+> 5.0
+> 7.5
+> 10.0
+> 12.5
+> 15.0
+> 17.5
+> 20.0
+> Tokens unmasked
+> Uniform ( = 1.0)
+> Shifted ( = 0.3)
+> 0.0 0.2 0.4 0.6 0.8 1.0
+> Masking ratio t
+> 0.0
+> 2.5
+> 5.0
+> 7.5
+> 10.0
+> 12.5
+> 15.0
+> 17.5
+> 20.0
+> Loss weight (1/ t)
+> Model best
+> calibrated here
+> Shifted schedule
+> puts most work here
+> 1/ tloss weight
+> High-weight region
+> (shifted schedule)
+
+Figure 5. Number of tokens unmasked per step under uniform and shifted schedules (left), and the 1/t loss weight as a function of the masking ratio (right). 
+
+A.4. Easy-first, Hard-last Unmasking Order 
+
+Figure 6 plots the per-step informative-token (vowel + consonant) ratio. The AR schedule (CosyVoice3 audio aligned via MFA) is U-shaped: it must commit leading and trailing silence at the boundary steps. DELTA-TTS rises monotonically – silence anchors first, phonetically-meaningful tokens last, once enough bidirectional context has accumulated. This phoneme-class deferral mirrors the AR-difficulty deferral shown in Figure 4(b). 
+
+> 2
+
+https://github.com/FunAudioLLM/CosyVoice 
+
+11 DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for TTS 0 s 4.3 s                  
+
+> Example utterance (107 tokens at 25 Hz, 4.3 s)
+> silence (non-informative) vowel (informative) consonant (informative)
+> 12345678910 11 12 13 14 15 16
+> Decoding step (dLLM iteration; AR positions split into 16 equal buckets)
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> Informative-token ratio
+> (vowel + consonant per step)
+> CosyVoice3 (AR, front-to-back)
+> dLLM (no Conv)
+> dLLM (Conv, Ours)
+
+Figure 6. Per-step informative-token (vowel + consonant) ratio averaged over 1088 utterances. Strip on top: phoneme classes on one example utterance. 
+
+A.5. Per-Step Commit Ordering 
+
+Figure 7 shows, at each unmasking step, the mean teacher-forced AR confidence of the positions DELTA-TTS commits. DELTA-TTS commits high-AR-confidence positions early and defers low-AR-confidence positions to later steps, once the bidirectional decoder has resolved more surrounding context. This deferral is what lets DELTA-TTS commit even AR-hard positions at high confidence, producing the elevated confidence distribution in Figure 4(b). 1 3 5 7 9 11 13 15 
+
+Unmasking step 
+
+0.06 
+
+0.07 
+
+0.08 
+
+0.09 
+
+0.10 
+
+> AR confidence at GT token
+> (of positions committed at this step)  DELTA-TTS (Ours)
+
+Figure 7. Mean teacher-forced AR confidence (GT token) of the positions DELTA-TTS commits at each unmasking step, over 1088 
+
+utterances. AR-low-confidence positions are deferred to later steps. 
+
+A.6. Subjective Evaluation Details 
+
+For the subjective evaluation reported in Table 2, we recruited 20 adult volunteer participants anonymously from the authors’ academic institution. Each participant rated 30 audio samples drawn from Seed-TTS test-en , selected to cover a range of utterance lengths. For every sample, the listener rated SMOS (speaker similarity to the prompt voice, 1–5) for each of the 12 DELTA-TTS: Adapting Autoregressive Model into Diffusion Language Model for TTS 
+
+three systems (DELTA-TTS, CosyVoice3, ground truth) and CMOS (comparative naturalness against ground truth, −3 to 
+
++3 ) for the two synthetic systems. Participation was unpaid and involved only standard audio listening, posing no physical or psychological risk. 
+
+A.7. Limitations and Future Work 
+
+We view DELTA-TTS as a starting point for converting LLM-backboned AR TTS models into dLLMs, rather than a finished system. Specifically, the current setup determines the target length from a rule-based text-to-speech ratio; this is a general challenge for dLLM-based generation and we expect it to be addressed as dLLM techniques mature. The model also operates only in English, leaving room for multilingual extension. We also expect the conversion approach to transfer to other AR speech LMs and to richer multi-codebook tokenizers, and reward-based fine-tuning with metrics such as WER and speaker similarity is a natural next step. 
+
+A.8. Broader Impacts 
+
+This work is intended for academic research purposes. DELTA-TTS shows that TTS can be obtained from a pretrained AR backbone with 585 hours of public data and ∼15% additional parameters, lowering the compute and data barrier for speech-synthesis research and bridging dLLM research between text and speech language modeling. As with any high-fidelity zero-shot TTS, the model carries misuse risks such as voice impersonation; we urge downstream users to obtain consent from any reference speaker and to clearly disclose synthetic audio. 13

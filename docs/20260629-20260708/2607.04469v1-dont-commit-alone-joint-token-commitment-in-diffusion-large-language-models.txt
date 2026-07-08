@@ -1,0 +1,214 @@
+Title: Don't Commit Alone: Joint Token Commitment in Diffusion Large Language Models
+
+URL Source: https://arxiv.org/pdf/2607.04469v1
+
+Published Time: Tue, 07 Jul 2026 02:22:53 GMT
+
+Number of Pages: 10
+
+Markdown Content:
+# Don’t Commit Alone: Joint Token Commitment in Diffusion Large Language Models 
+
+# Lin Yao 1,21School of Computer Science, Shanghai Jiao Tong University, Shanghai, 200240, China 
+
+> 2
+
+# Zhongguancun Academy, Beijing, 100097, China 
+
+# lin.yao@sjtu.edu.cn 
+
+# Abstract 
+
+Diffusion large language models (dLLMs) commit multiple tokens per denoising step by decoding each selected position independently from the shared context; when those positions are dependent, the resulting factorization error is captured by conditional total correlation, which confidence-based selection cannot observe from marginals alone. We propose C OCOMMIT , a marker-gated coordination pass that briefly defers commitment: after the usual bundle selection, a learned marker announces the commit set and the backbone’s last-n layers are re-applied so marked positions coordinate—approximating joint-mode decoding—before greedy argmax writes tokens. The method reuses existing weights with one extra partial forward pass and no auxiliary model. On LLaDA2.1-mini with LoRA adapters and matched greedy inference, joint commitment improves accuracy on all six benchmarks we evaluate, with the largest gains on reasoning and exact-answer tasks. 
+
+# 1 Introduction 
+
+Diffusion large language models (dLLMs) generate text by iteratively revealing tokens from a masked sequence, committing multiple positions in parallel at each denoising step ( 2, 22 , 24 , 27 , 35 ). Parallelism is the source of their speed advantage over autoregressive decoding, and also the source of a characteristic error: tokens committed in the same step are predicted from the same context but not from each other, so each is drawn from its own marginal distribution while the tuple they form may belong to no coherent joint completion ( 17 ). This failure is usually described operationally—“parallel tokens can be mutually inconsistent”—and treated downstream, by editing or remasking committed tokens after the fact ( 5, 30 , 33 ). We instead start from what the error is . For a commit set S and context ctx , factorized commitment replaces the joint posterior 
+
+p(xS | ctx) with the product of marginals Q 
+
+> i∈S
+
+p(xi | ctx) . The gap between the two is the conditional total correlation TC( xS | ctx) , and it vanishes if and only if the committed positions are conditionally independent given the context. The entire quality–speed trade-off of parallel decoding is governed by this single quantity: autoregressive decoding pays for exactness with sequentiality ( |S| = 1 , TC ≡ 0); parallel commitment in a dLLM pays TC( xS | ctx) per step for speed. This view exposes a structural blind spot in how current samplers choose which positions to commit. Confidence-based selection—committing the positions whose marginals are most peaked—measures marginal entropy, not dependence. Marginals are averages over the joint modes of the posterior: in a context compatible with both “New York City” and “San Francisco”, the first position assigns high probability to both New 
+
+and San , and each position’s confidence can be inherited from a different mode. High marginal confidence therefore does not imply low total correlation, and no selection rule that reads only marginals can bound the commitment error. The failure is not that confidence heuristics are poorly tuned; it is that the information they would need is absent from the quantities they observe. If selection cannot avoid dependent bundles, commitment must handle them. Our key observation is that the information required for coordination is already computed—the backbone’s hidden states encode the joint 1
+
+> arXiv:2607.04469v1 [cs.CL] 5 Jul 2026
+
+structure of the block—but the output interface discards it: a factorized readout head projects each position onto the vocabulary independently, at exactly the moment the positions’ fates are being decided. What is missing is not capacity but a communication channel at decision time .COCOMMIT adds that channel with minimal machinery (Figure 1). Each denoising step is split into two stages that share one prefix computation. Stage A runs the last n transformer layers without modification and selects the commit bundle by the standard confidence rule; nothing is written. A learned marker vector is then added to the hidden states of the selected positions, announcing “these positions are being decided now”, and Stage B re-applies the same last-n layers. Attention among the marked positions lets the bundle coordinate— break the mode averaging—before any token is committed; the final tokens are read from the Stage B logits. Under greedy commitment (the standard regime for these models), this deterministic coordination followed by per-position argmax yields a tuple from a single joint mode rather than a mixture of modes: we target the joint mode of p(xS | ctx) , not samples from the joint. Although the readout remains one softmax per position, coordination fixes which mode the bundle resolves; the claim is scoped to greedy argmax—under temperature sampling, per-position noise can still split modes, and a wrong but self-consistent mode may be committed confidently, errors that orthogonal repair methods address after the fact. In training, branch 2 predicts marked positions given the marker announcement; edit/clean terms hold unmarked predictions fixed, so the announcement helps only through attention among marked positions, and the adapters learn to make the bundle consult itself. The mechanism generalizes along two orthogonal axes. First, the decision set need not be restricted to masked positions: marking a visible token would submit its current value for joint re-negotiation, unifying commitment (mask-to-token) and revision (token-to-token) as one operation; our experiments mark masked commit bundles only. Second, the coordination pass may be iterated : K=0 recovers factorized decoding, 
+
+K=1 is our main setting, and deeper iteration would trade test-time compute for stronger within-bundle coordination—in the limit, with injected noise and denoising training, toward a conditional joint model over the bundle in the spirit of MAR (20). dLLMs fail along two orthogonal axes: within-step factorization—incoherent tuples assembled from confident factorized marginals, with error TC( xS | ctx) —and across-step semantic error, where an early wrong commit steers later predictions as confident context. C OCOMMIT targets the first at the instant of commitment; repair methods target the second; the two are complementary rather than alternative fixes. This paper makes the following contributions: • We motivate joint token commitment by framing within-step parallel error as conditional total correlation of the commit bundle, and by identifying a blind spot in confidence-based selection: per-position marginals average over joint modes and carry no dependency signal. • We propose C OCOMMIT , a marker-gated coordination pass that reuses the backbone’s last-n layers so the commit bundle exchanges information before tokens are written—no new head, no external dependency model, one extra partial forward pass (Section 4). • We evaluate C OCOMMIT on six standard benchmarks under a matched inference protocol, training only LoRA adapters and marker vectors on generic prose; joint commitment improves all six tasks, with the largest gains on reasoning and exact-answer benchmarks while remaining positive elsewhere (Table 1). 
+
+# 2 Related Work 
+
+Discrete diffusion language models. D3PM ( 2) established diffusion over discrete tokens and identified absorbing-state (masking) corruption as best suited to text; SEDD ( 22 ), MDLM ( 27 ), and MD4 ( 29 ) progres-sively simplified the formulation, and RADD ( 26 ) showed that the learned predictor is exactly a conditional distribution over clean tokens given the unmasked context. LLaDA ( 24 ) and its successors ( 5, 25 ) scaled the recipe to large models, Dream ( 35 ) and DiffuLLaMA ( 10 ) adapted autoregressive checkpoints, and BD3-LM ( 1 ) introduced the semi-autoregressive block schedule that LLaDA2.1 ( 5) adopts. All of these commit multiple positions per step by independent argmax or sampling from per-position distributions; our work targets precisely this commitment rule and leaves the rest of the pipeline unchanged. 2Figure 1: Factorized versus joint commitment (one denoising step). (a) Base sampler: a single L-layer pass yields factorized logits at every visible and masked position; masks above τm2t form bundle S and commit by independent argmax—positions in S can resolve different joint modes (e.g. the keys . . . the desk is mine )even when every marginal is confident; unselected masks stay [M] . (b) C OCOMMIT : shared prefix states 
+
+h = Prefix(ctx , z ); Stage A selects S from unmarked factorized logits; marker m is added to h on S only; Stage B re-applies the same last-n layers for a joint decode before M2T/T2T writes. 
+
+Continuous diffusion language models. A parallel line keeps the generative trajectory in a continuous space and discretizes late. ELF ( 14 ) denoises in a frozen encoder’s embedding space with flow matching and maps to tokens only at the terminal step; Cola ( 12 ) transports a latent prior with a block-causal DiT and decodes text from the latent. In our vocabulary, these models coordinate positions continuously throughout the trajectory and never perform a mid-trajectory parallel factorized commit; the price is the loss of early discrete pruning and a terminal continuous-to-discrete mapping step. We treat this family as the late-discretization reference point of the design space, not as a competitor: C OCOMMIT localizes ELF-style pre-discretization coordination to each commit instant of an early-committing model, rather than returning to fully late discretization. 
+
+Dependency-aware parallel decoding. The inconsistency of independently decoded parallel tokens predates dLLMs: non-autoregressive translation observed it as the multimodality problem ( 11 ), and iterative refinement schemes such as Mask-Predict ( 9 ) amortize it across steps. ParallelBench ( 17 ) documents the same failure in modern dLLMs. Closest to our diagnosis, discrete copula diffusion ( 21 ) shows that per-position marginals miss the dependency structure (the copula) of the joint and restores it with a separate autoregressive model at inference. We internalize the correction instead: the backbone itself is made dependency-aware at commit time through a marker-gated re-application of its own last-n layers, requiring no auxiliary model and matching the greedy-commitment regime these systems actually use. 
+
+Repair-based self-correction. An orthogonal family repairs commitments after they are written: token-editing phases in LLaDA2.1 ( 5), uniform or targeted remasking ( 30 , 33 , 36 ), and training-based correctors ( 13 ,15 , 18 , 28 , 34 ). These methods act on the across-step axis—undoing or overwriting tokens whose semantics turn out to be wrong—whereas C OCOMMIT acts within the step, reducing the factorization error at the source so that fewer inconsistent tuples are written at all. 3Joint prediction and iterated computation. MAR ( 20 ) models a block’s joint distribution with a diffusion head on top of a transformer backbone; our Stage B can be seen as the cheapest member of that family—a single deterministic coordination pass with shared weights and cross-entropy readout, applied online to exactly the positions about to be committed rather than offline to a whole block. Iterating the coordination pass connects to weight-tied recurrent computation ( 3, 6 ) and to recurrent-depth test-time scaling ( 8 ): K buys coordination depth at commit time, a new axis of test-time compute for parallel decoders. Classical iterated conditional modes ( 4 ) is the token-feedback analogue of iterating coordination on hidden states rather than discrete tokens. 
+
+# 3 Preliminaries: LLaDA2.1 Training and Inference 
+
+We use LLaDA2.1 ( 5 ) as the base system, a semi-autoregressive block-diffusion dLLM that generates text block by block, using iterative denoising within each block. This section reviews the base training and inference procedure used by LLaDA2.1. 
+
+# 3.1 Base Training 
+
+Block-diffusion forward. The sequence is partitioned into blocks of B tokens. Attention is block-causal: within a block, every position—including [M] positions—attends to every other position bidirectionally ;across blocks, attention is causal, so block j sees only blocks 0, . . . , j . Training and inference share this structure. 
+
+M2T/T2T supervision. Training corrupts a clean sequence x = ( x1, . . . , x T ) into an input z containing three kinds of positions: a masked set M (input [M] ), a wrong-visible set W (visible tokens differing from the clean token), and a clean-visible set G (visible tokens equal to the clean token). The model reads the full corrupted input z and outputs one token distribution pi per position; every supervised position is trained with cross-entropy toward its clean token: 
+
+L = λm2t 
+
+X
+
+> i∈M
+
+CE( pi, x i) + λedit 
+
+X
+
+> i∈W
+
+CE( pi, x i) + λclean 
+
+X
+
+> i∈G
+
+CE( pi, x i). (1) The three terms teach mask filling (M2T), error editing (T2T-edit), and keeping correct tokens unchanged (T2T-clean)—exactly the two write behaviors of the inference-time decoding step below. 
+
+# 3.2 Base Inference 
+
+Block-wise denoising. The response is generated block by block, left to right. Prompt tokens enter the sequence unmasked and are never edited. Once a response block is complete, its tokens are never edited again; only positions in the current block are initialized as [M] and updated by denoising. 
+
+Factorized M2T/T2T updates. The current block is decoded by iterative denoising. Let ctx denote the fixed context outside the current block—the prompt and completed response blocks, whose tokens are never edited again. Let z denote the current state of the block, containing already-committed tokens and remaining [M] 
+
+positions. Each step runs one forward pass through the L-layer backbone on (ctx , z ), and the language-model head reads out one independent distribution pθ (· | ctx , z ) per position in the current block. The step then updates the current block by two rules that share these logits. First, mask-to-token (M2T) commitment: a commit set S is chosen among the masked positions of the block—those whose maximum probability exceeds a threshold τm2t , falling back to the single most confident position—and every i ∈ S is written to its argmax token independently: 
+
+zi ← arg max  
+
+> v∈V
+
+pθ (v | ctx , z ), i ∈ S. (2) 4Second, token-to-token (T2T) editing: every already-visible position of the current block is re-examined, and its current token ˜zi is overwritten when a different candidate is sufficiently confident: 
+
+zi ← z∗ 
+
+> i
+
+if p∗ 
+
+> i
+
+> τ t2t and z∗
+
+> i
+
+̸ = ˜ zi, z∗ 
+
+> i
+
+= arg max  
+
+> v∈V
+
+pθ (v | ctx , z ), p∗ 
+
+> i
+
+= max  
+
+> v∈V
+
+pθ (v | ctx , z ). (3) Steps repeat until the block contains no [M] and no edit fires (up to a maximum number of denoising steps). The completed block then joins the fixed context ctx and is never edited in later blocks. The base decoder only exposes per-position distributions pθ (zi | ctx , z ) from the language-model head. When several masked positions are selected in the same commit set S, the decoder does not choose their values jointly; it applies an independent argmax at each i ∈ S. The T2T edits in the same step are also read from the same pre-update state z: they can revise already-visible tokens, but they do not condition on the newly written M2T tokens from that step. Thus a single step has no explicit joint choice among simultaneous M2T writes, or between those writes and simultaneous T2T edits. We refer to this update rule as factorized commitment .
+
+# 4 Method 
+
+LLaDA2.1’s original decoding step is factorized. C OCOMMIT replaces the original M2T/T2T update with a marker-gated coordination pass, turning the step’s updates into a joint-mode commitment over the selected commit bundle. Training (Section 4.1) teaches the backbone this behavior through two branches; inference (Section 4.2) runs the same two branches serially (Figure 2). 
+
+Compute-constrained validation. The principled way to teach marker-gated coordination would integrate it throughout pretraining, instruction tuning, and alignment so the backbone learns to coordinate at every denoising stage. Such full-scale training would be the cleanest validation of our account, but it is beyond our available compute. We therefore use a deliberately minimal implementation: starting from the released LLaDA2.1-mini checkpoint, we freeze the backbone and add only low-rank LoRA adapters together with the marker vectors, trained in a short continued-pretraining pass on generic English prose (Section 5.1). This setting is not intended as the final recipe; it is a stress test of the mechanism—if within-step coordination matters, the signal should be visible even when only a small adapter teaches the split forward on top of an already-finished model with out-of-domain CPT text. The empirical results should therefore be read as evidence that marker-gated coordination can be learned at commitment time, not as a claim that this LoRA checkpoint is the best possible instantiation. 
+
+# 4.1 Training 
+
+Training applies the split forward of Figure 2 to the corrupted sequence z of Section 3.1, with two branches running in parallel on a doubled batch. We form each z from clean x using the self-generated x → z corruption of Yao (34) —a no-gradient draft pass populates W from the model’s own draft errors rather than random vocabulary substitutions—rather than the random-token visible corruptions of base LLaDA2.1 training. Each example computes hidden states h = Prefix( z) once from the first L − n layers; write LastN( ·) for the remaining n layers. 
+
+Branch 1: selection branch (no marker). h passes directly through the last n layers, ℓmain = Head(LastN( h)) ,and the full three-term loss of Eq. (1) is applied exactly as in base training—M2T on all of M, edit and clean on all of W and G. At inference, selection reads these unmarked factorized logits to choose the commit bundle 
+
+S; this branch keeps the distribution that selection reads fully supervised under the adapters. 
+
+Branch 2: assignment branch (marker). Branch 2 starts from h = Prefix( z). (i) Sample |D| = s ∼
+
+Uniform {smin , . . . , s max } and draw D ⊆ M uniformly, forming the position indicator 1D with (1D )j = 1 
+
+5Figure 2: Split forward pass through the L-layer backbone. (a) Training: shared Prefix, then two branches in parallel—factorized selection (no marker) and marked coordination on a random bundle. (b) Inference: the same split, but serial—Stage A selects the commit bundle; Stage B coordinates it before M2T/T2T writes. iff j ∈ D . (ii) For i = 0 , . . . , K −1,
+
+h(0) = h, h(i+1) = LastN 
+
+
+
+h(i) + 1D ⊙ mi
+
+
+
+, ℓchosen = Head 
+
+
+
+h(K)
+
+, (4) where each mi is a learned marker vector for round i. (iii) Apply Eq. (1) to ℓchosen : edit and clean on all of W
+
+and G, M2T on D only. Random bundles subsume confidence-selected ones: the model learns a coordinated conditional for 
+
+every bundle, of which the confidence-selected bundle used at inference is a special case, and no confidence computation is needed during training. Supervision is ordinary cross-entropy against the ground-truth tokens— coordination is induced not by a joint loss but by the conditioning: branch 2 predicts the bundle knowing which positions form it , and the shared attention layers are the only pathway through which that knowledge can improve the prediction. In implementation, the two branches are concatenated into one doubled batch sharing a single prefix forward and a single backward pass. 
+
+# 4.2 Inference 
+
+Inference applies the same split forward of Figure 2 to each denoising step of Section 3.2, with branch 1 and branch 2 running serially rather than on a doubled batch—branch 1 first, reading factorized confidences 6ℓA = Head(LastN( h)) from h = Prefix(ctx , z ) and selecting S by the rule of Section 3.2; branch 2 then coordinates this S (not a random training bundle) via Eq. (4) with 1S when S̸ = ∅, setting ℓ ← Head( h(K))
+
+or ℓ ← ℓA otherwise, and M2T/T2T write from ℓ (Eqs. (2)–(3)). 
+
+# 5 Experiments 
+
+We compare the released LLaDA2.1-mini base model against our LoRA adapter trained with C OCOMMIT on six benchmarks under the shared protocol below (Table 1). 
+
+# 5.1 Experimental Setup 
+
+Model and inference. All runs use LLaDA2.1-mini (16B MoE, 20 transformer layers) ( 5 ). Benchmark numbers use the official generate() path in Q Mode with generation length 16384, 32 steps per block, block length B=32 , τm2t =0 .7, τt2t =0 (no confidence gating on T2T edits), at most 16 post-steps, greedy decoding (temperature 0), and batch size 1. The base column uses the released checkpoint with factorized decoding; C OCOMMIT uses the LoRA and marker weights trained below and adds a marker-gated coordination pass over the last n=3 transformer layers with K=1 round (Section 4.2). Both conditions share inference code and the hyperparameters above. For AIME 2025 we use the boxed-prompt evaluator consistent with prior LLaDA2.1 reporting. 
+
+Training. We start from the released LLaDA2.1-mini checkpoint, freeze the backbone, and train LoRA adapters ( r=16 , α=32 , Kaiming initialization on the attention query–key–value and output projections of all 
+
+L layers) together with K zero-initialized marker vectors {m0, . . . , mK−1}—one per coordination round, the only parameters added beyond LoRA. The training set is a 50k-document subset of FineWeb-Edu (quality score 
+
+≥ 3, 256–1800 tokens per document), generic English prose unrelated to the evaluation benchmarks. Corrupted inputs z are built from clean x following Yao (34) , with the marker branch of Section 4.1 added on top; branch 2 marks a random bundle of s positions with s ∼ Uniform {1, . . . , 16 }. We optimize with AdamW at learning rate 5×10 −6 for one epoch (global batch size 8, sequence length 2048, cosine schedule with 1% warmup) under FSDP2 with bf16 and gradient checkpointing, using loss weights (λm2t , λ edit , λ clean ) = (1 .0, 0.3, 0.2) ,and evaluate the checkpoint at training step 6250. 
+
+Benchmarks. The reported set covers six benchmarks grouped into three categories. TriviaQA is an open-domain factual QA benchmark whose validation examples are scored by exact match against answer aliases ( 16 ). MMLU-Pro is a multiple-choice knowledge benchmark scored by accuracy ( 31 ). DROP is a reading-comprehension benchmark requiring discrete reasoning over paragraphs, scored by exact match on the validation split ( 7). CMATH is a Chinese elementary-school math benchmark with short numeric final answers, scored by numeric exact match ( 32 ). AIME 2025 is a competition-math benchmark with integer answers; we report pass@1 on the 30-problem 2025 set ( 23 ). GSM Plus is a grade-school math benchmark with numeric final answers, scored by accuracy (19). 
+
+# 5.2 Main Results 
+
+Table 1 shows a consistent pattern: C OCOMMIT produces the largest gains on benchmarks that require coherent multi-token or exact final-answer commitment (DROP +4 .38 , CMATH +2 .01 , AIME 2025 +3 .33 , where the 30-problem set means +3 .33 corresponds to one additional problem solved), and is roughly on par or slightly better on the remaining three, with all reported differences positive. The size of the reasoning and math gains, against the near-flatness on TriviaQA, MMLU-Pro, and GSM Plus, is consistent with the within-step coordination failure C OCOMMIT is designed to address: when several positions must resolve a single joint mode before writing, marker-gated coordination reduces the factorization error at the source rather than leaving downstream repair to clean up inconsistent tuples. 7Table 1: Main results on 6 benchmarks. All methods use LLaDA2.1-mini with identical inference parameters. Metrics are accuracy or exact match (%); best results are in bold .                        
+
+> Category Benchmark Base COCOMMIT ∆
+> Knowledge TriviaQA (EM) 43.71 44.63 +0 .92
+> MMLU-Pro 58.78 58.93 +0 .15
+> Reasoning DROP (EM) 53.98 58.36 +4 .38
+> Math CMATH 82.33 84.34 +2 .01
+> AIME 2025 30.00 33.33 +3 .33
+> GSM Plus 67.54 68.04 +0 .50
+
+# 6 Conclusion 
+
+Diffusion large language models pay for speed with a per-step distributional error that has a name: the conditional total correlation of the commit bundle. Confidence-based selection has no view of this error: per-position marginals average over joint modes and carry no dependency signal. C OCOMMIT responds at the only place the error can be intercepted—the instant of commitment—by announcing the bundle with a learned marker and re-applying the backbone’s own last-n layers so the bundle coordinates before tokens are written. Under greedy commitment, one deterministic coordination round is designed to replace independent marginal argmax with an approximate joint-mode argmax, at the cost of a single extra partial forward pass, lightweight adapters, and one marker vector. The mechanism suggests two extensions we do not evaluate here: marking visible tokens would unify commitment with revision, and iterating the coordination pass would trade test-time compute for stronger jointness, spanning factorized decoding to conditional diffusion over the bundle. Within-step coordination does not remove the need for across-step repair—a coordinated bundle can still be wrong—but it targets the structural error that repair would otherwise be left to clean up. 
+
+Limitations. COCOMMIT requires fine-tuning (adapters and the marker); it is not a training-free rule. The coordination claim is scoped to greedy commitment: under temperature sampling, per-position noise can still split a bundle across modes unless the coordinated marginals are sharp. The hidden-state iteration for 
+
+K > 1 carries no theoretical monotonicity guarantee, and our checkpoints are trained at K = 1 , so deeper coordination requires training with sampled K. Marking visible tokens for joint revision is discussed but not evaluated here. Finally, all experiments use one model family (LLaDA2.1-mini); the generality of the mode-averaging diagnosis across dLLM families remains to be established. 
+
+# References 
+
+[1] Marianne Arriola, Aaron Gokaslan, Justin T. Chiu, Zhihan Yang, Zhixuan Qi, Jiaqi Han, Subham Sekhar Sahoo, and Volodymyr Kuleshov. Block discrete denoising diffusion language models. In International Conference on Learning Representations , 2025. [2] Jacob Austin, Daniel Johnson, Jonathan Ho, Daniel Tarlow, and Rianne van den Berg. Structured denoising diffusion models in discrete state-spaces. In Advances in Neural Information Processing Systems , 2021. [3] Shaojie Bai, J Zico Kolter, and Vladlen Koltun. Deep equilibrium models. In Advances in Neural Information Processing Systems , 2019. [4] Julian Besag. On the statistical analysis of dirty pictures. Journal of the Royal Statistical Society: Series B (Methodological) , 48(3):259–279, 1986. 8[5] Tiwei Bie, Maosong Cao, Xiang Cao, Bingsen Chen, Fuyuan Chen, Kun Chen, Lun Du, Daozhuo Feng, Haibo Feng, Mingliang Gong, Zhuocheng Gong, Yanmei Gu, Jian Guan, Kaiyuan Guan, Hongliang He, Zenan Huang, Juyong Jiang, Zhonghui Jiang, Zhenzhong Lan, Chengxi Li, Jianguo Li, Zehuan Li, Huabin Liu, Lin Liu, Guoshan Lu, Yuan Lu, Yuxin Ma, Xingyu Mou, Zhenxuan Pan, Kaida Qiu, Yuji Ren, Jianfeng Tan, Yiding Tian, Zian Wang, Lanning Wei, Tao Wu, Yipeng Xing, Wentao Ye, Liangyu Zha, Tianze Zhang, Xiaolu Zhang, Junbo Zhao, Da Zheng, Hao Zhong, Wanli Zhong, Jun Zhou, Junlin Zhou, Liwang Zhu, Muzhi Zhu, and Yihong Zhuang. LLaDA2.1: Speeding up text diffusion via token editing. arXiv preprint arXiv:2602.08676 , 2026. [6] Mostafa Dehghani, Stephan Gouws, Oriol Vinyals, Jakob Uszkoreit, and Łukasz Kaiser. Universal transformers. In International Conference on Learning Representations , 2019. [7] Dheeru Dua et al. DROP: A reading comprehension benchmark requiring discrete reasoning over paragraphs. arXiv preprint arXiv:1903.00161 , 2019. [8] Jonas Geiping, Sean McLeish, Neel Jain, John Kirchenbauer, Siddharth Singh, Brian R Bartoldson, Bhavya Kailkhura, Abhinav Bhatele, and Tom Goldstein. Scaling up test-time compute with latent reasoning: A recurrent depth approach. arXiv preprint arXiv:2502.05171 , 2025. [9] Marjan Ghazvininejad, Omer Levy, Yinhan Liu, and Luke Zettlemoyer. Mask-predict: Parallel decoding of conditional masked language models. In Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing , 2019. [10] Shansan Gong, Shivam Agarwal, Yizhe Zhang, Jiacheng Ye, Lin Zheng, Mukai Li, Chenxin An, Peilin Zhao, Wei Bi, Jiawei Han, Hao Peng, and Lingpeng Kong. Scaling diffusion language models via adaptation from autoregressive models. International Conference on Learning Representations , 2025. [11] Jiatao Gu, James Bradbury, Caiming Xiong, Victor OK Li, and Richard Socher. Non-autoregressive neural machine translation. In International Conference on Learning Representations , 2018. [12] Hongcan Guo, Qinyu Zhao, Yian Zhao, Shen Nie, Rui Zhu, Qiushan Guo, Feng Wang, Tao Yang, Hengshuang Zhao, Guoqiang Wei, and Yan Zeng. Continuous latent diffusion language model. arXiv preprint arXiv:2605.06548 , 2026. [13] Haoyu He, Katrin Renz, Yong Cao, and Andreas Geiger. MDPO: Overcoming the training-inference divide of masked diffusion language models. arXiv preprint arXiv:2508.13148 , 2025. [14] Keya Hu, Linlu Qiu, Yiyang Lu, Hanhong Zhao, Tianhong Li, Yoon Kim, Jacob Andreas, and Kaiming He. ELF: Embedded language flows. arXiv preprint arXiv:2605.10938 , 2026. [15] Zemin Huang, Yuhang Wang, Zhiyang Chen, and Guo-Jun Qi. Don’t settle too early: Self-reflective remasking for diffusion language models. arXiv preprint arXiv:2509.23653 , 2025. [16] Mandar Joshi, Eunsol Choi, Daniel S Weld, and Luke Zettlemoyer. TriviaQA: A large scale distantly supervised challenge dataset for reading comprehension. arXiv preprint arXiv:1705.03551 , 2017. [17] Wonjun Kang, Kevin Galim, Seunghyuk Oh, Minjae Lee, Yuchen Zeng, Shuibai Zhang, Coleman Hooper, Yuezhou Hu, Hyung Il Koo, Nam Ik Cho, and Kangwook Lee. ParallelBench: Understanding the trade-offs of parallel decoding in diffusion LLMs. arXiv preprint arXiv:2510.04767 , 2025. [18] Jaeyeon Kim, Seunggeun Kim, Taekyun Lee, David Z Pan, Hyeji Kim, Sham Kakade, and Sitan Chen. Fine-tuning masked diffusion for provable self-correction. arXiv preprint arXiv:2510.01384 , 2025. [19] Qintong Li, Leyang Cui, Xueliang Zhao, Lingpeng Kong, and Wei Bi. GSM-Plus: A comprehensive benchmark for evaluating the robustness of LLMs as mathematical problem solvers. arXiv preprint arXiv:2402.19255 , 2024. 9[20] Tianhong Li, Yonglong Tian, He Li, Mingyang Deng, and Kaiming He. Autoregressive image generation without vector quantization. In Advances in Neural Information Processing Systems , 2024. [21] Anji Liu, Oliver Broadrick, Mathias Niepert, and Guy Van den Broeck. Discrete copula diffusion. In 
+
+International Conference on Learning Representations , 2025. [22] Aaron Lou, Chenlin Meng, and Stefano Ermon. Discrete diffusion modeling by estimating the ratios of the data distribution. In International Conference on Machine Learning , 2024. [23] Mathematical Association of America. American invitational mathematics examination 2025, 2025. [24] Shen Nie, Fengqi Zhu, Zebin You, Xiaolu Zhang, Jingyang Ou, Jun Zhou, Ji-Rong Wen, and Chongxuan Li. LLaDA: Large language diffusion with masking. In International Conference on Machine Learning ,2025. [25] Shen Nie, Qiyang Min, Shaoxuan Xu, Zihao Huang, Yuxuan Song, Yong Shan, Yankai Lin, Wayne Xin Zhao, Chongxuan Li, and Ji-Rong Wen. Improved large language diffusion models. arXiv preprint arXiv:2606.25331 , 2026. [26] Jingyang Ou, Shen Nie, Kaiwen Xue, Fengqi Zhu, Jiacheng Sun, Zhenguo Li, and Chongxuan Li. Your absorbing discrete diffusion secretly models the conditional distributions of clean data. In International Conference on Learning Representations , 2025. [27] Subham Sekhar Sahoo, Marianne Arriola, Yair Schiff, Aaron Gokaslan, Edgar Marroquin, Justin T. Chiu, Alexander M. Rush, and Volodymyr Kuleshov. Simple and effective masked diffusion language models. In Advances in Neural Information Processing Systems , 2024. [28] Yair Schiff, Omer Belhasin, Roy Uziel, Guanghan Wang, Marianne Arriola, Gilad Turok, Michael Elad, and Volodymyr Kuleshov. Learn from your mistakes: Self-correcting masked diffusion models. arXiv preprint arXiv:2602.11590 , 2026. [29] Jiaxin Shi, Kehang Han, Zhe Wang, Arnaud Doucet, and Michalis K. Titsias. Simplified and generalized masked diffusion for discrete data. In Advances in Neural Information Processing Systems , 2024. [30] Guanghan Wang, Yair Schiff, Subham Sekhar Sahoo, and Volodymyr Kuleshov. Remasking discrete diffusion models with inference-time scaling. In Advances in Neural Information Processing Systems ,2025. [31] Yubo Wang, Xueguang Ma, Ge Zhang, Yuansheng Ni, Abhranil Chandra, Shiguang Guo, Weiming Ren, Aaran Arulraj, Xuan He, Ziyan Jiang, et al. MMLU-Pro: A more robust and challenging multi-task language understanding benchmark. arXiv preprint arXiv:2406.01574 , 2024. [32] Tianwen Wei, Jian Luan, Wei Liu, Shuang Dong, and Bin Wang. CMATH: Can your language model pass chinese elementary school math test? arXiv preprint arXiv:2306.16636 , 2023. [33] Lin Yao. Remask, don’t replace: Token-to-mask refinement in diffusion large language models. arXiv preprint , 2026. [34] Lin Yao. Self-generated error training for token editing in diffusion language models. arXiv preprint arXiv:2606.17175 , 2026. [35] Jiacheng Ye, Zhihui Xie, Lin Zheng, Jiahui Gao, Zirui Wu, Xin Jiang, Zhenguo Li, and Lingpeng Kong. Dream 7B: Diffusion large language models. arXiv preprint arXiv:2508.15487 , 2025. [36] Kevin Zhai, Sabbir Mollah, Zhenyi Wang, and Mubarak Shah. CORE: Context-robust remasking for diffusion language models. arXiv preprint arXiv:2602.04096 , 2026. 10
