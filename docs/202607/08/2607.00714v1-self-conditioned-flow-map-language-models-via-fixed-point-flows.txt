@@ -1,0 +1,1100 @@
+Title: Self-conditioned Flow Map Language Models via Fixed-point Flows
+
+URL Source: https://arxiv.org/pdf/2607.00714v1
+
+Published Time: Thu, 02 Jul 2026 01:03:23 GMT
+
+Number of Pages: 25
+
+Markdown Content:
+Preprint. Under review. 
+
+# SELF -CONDITIONED FLOW MAP LANGUAGE MODELS VIA FIXED -POINT FLOWS 
+
+Jaehoon Yoo 1∗ Wonjung Kim 1∗ Floor Eijkelboom 2 Chanhyuk Lee 1
+
+Nicholas M. Boffi 3 Seunghoon Hong 1† Jinwoo Kim 1†
+
+> 1
+
+KAIST 2University of Amsterdam 3Carnegie Mellon University 
+
+# ABSTRACT 
+
+Self-conditioning is a core technique that enhances continuous flow-based language models, where the model learns to denoise generated text by conditioning on its own denoising estimate. While empirically successful, its performance improvements are poorly understood. Moreover, there is growing interest in the use of few-step generators based on flow maps, for which how to leverage self-conditioning is unclear. Here, we show that flow language models with self-conditioning solve a fixed-point iteration that bootstraps the performance of the learned denoiser. We use this viewpoint to formulate fixed-point flows , a two-dimensional class of self-conditioned flows, where the first dimension represents the flow process and the second represents the fixed-point iteration. We show that fixed-point flows define valid flow maps, and show that they can be distilled from self-conditioned flow models by compressing both fixed-point iterations and the flow process, the former with fixed-point distillation and the latter with flow map distillation. Our resulting flow map language model, FMLM ⋆, outperforms state-of-the-art self-conditioned models and few-step models in one- and few-step generation on OpenWebText. 1
+
+# 1 INTRODUCTION 
+
+Language models (LMs) based on continuous flows have recently emerged as a promising paradigm for non-autoregressive text generation (Lee et al., 2026; Chemseddine et al., 2026; Deschenaux & Gulcehre, 2026). By learning to denoise tokens in a continuous space, these models perform parallel iterative generation through a deterministic evolution driven by a velocity field. Importantly, such processes define a unique flow map, the solution operator that directly transports noise to data in as few as one function evaluation. This advantage has sparked recent breakthroughs on distillation of flow language models into flow map language models that are capable of generating text in one to few inference steps (Lee et al., 2026; Roos et al., 2026; Potaptchik et al., 2026). Recently, the performance of flow language models has improved through the incorporation of a self-conditioning mechanism (Chen et al., 2022). Unlike in usual flow training, self-conditioned flow models learn to denoise an input by conditioning on its own denoising prediction. Then, during generation, they perform denoising at each flow timestep by conditioning on the previously denoised outcome. Self-conditioning has empirically proven very effective (Dieleman et al., 2022; Strudel et al., 2022), and has been widely adopted in the latest state-of-the-art flow language models (Chen et al., 2026; Hu et al., 2026; Batzolis et al., 2026; Meshchaninov et al., 2026; Yang et al., 2026). Yet, despite its success, why self-conditioning leads to improvements remains poorly understood. Furthermore, it is unclear how to distill flows into flow maps under self-conditioning, as it introduces additional dependencies across generation timesteps. In this work, we introduce fixed-point flows , a mathematical framework for self-conditioned flows and their associated flow maps (Figure 1). Our key observation is that self-conditioned flow language models solve a fixed-point iteration that bootstraps the performance of learned denoising. With this insight, we characterize a two-dimensional class of self-conditioned flows, where the first dimension represents the original flow, and the second represents fixed-point iterations. We use this view to distill self-conditioned flow language models into flow maps by compressing both fixed-point iterations and flow, achieving state-of-the-art one- and few-step language modeling. Our main contributions are: 
+
+> ∗
+
+Equal contribution † Equal advising 
+
+> 1
+
+Code is available at https://github.com/Ugness/self-conditioned-fmlm .
+
+1
+
+> arXiv:2607.00714v1 [cs.CL] 1 Jul 2026
+
+Preprint. Under review.   
+
+> Flow Self-conditioned flow
+> Distillation
+> Flow training
+> flow t=0  t=1
+> fixed-point dynamics
+> Flow sampling
+> flow state
+> denoising estimate
+> fixed-point iteration
+> warm start
+> flow-map jump
+> fixed-point jump
+> SC training Warm-start
+> SC sampling Cold-start
+> SC sampling
+> Flow map distillation
+
+# +
+
+> Fixed-point
+> distillation
+
+# =
+
+> SC flow map
+> distillation
+
+Figure 1: Overview. We show that flow language models with self-conditioning solve a fixed-point iteration that refines the denoising estimate. We leverage this insight to formulate fixed-point flows, a class of self-conditioned flows that run fixed-point iterations at each flow timestep. Fixed-point flows yield valid flow maps, which we learn by compressing both the flow and the fixed-point iterations. • Fixed-point view of self-conditioning. We show that flow language models with self-conditioning implicitly learn a fixed-point iteration that refines the denoising estimate. We theoretically show that such behavior can emerge from self-conditioned training under a contractivity assumption. • Fixed-point flows and their flow maps. We introduce fixed-point flows, a formalization of self-conditioned flows. We show that fixed-point flows define a valid flow map, which can be learned by compressing both fixed-point iterations and flow with the respective few-step distillation objectives. • Empirical results. We distill self-conditioned flow language models into flow map language mod-els, achieving state-of-the-art one- and few-step generation on OpenWebText. We also show that it is possible to distill self-conditioned models into self-conditioning-free ones without degradation. 
+
+# 2 PRELIMINARY 
+
+Flow language models. Let V be a vocabulary of tokens, and denote text data with length L by 
+
+y = ( yl)Ll=1 ∈ V L. The goal of language modeling is to learn the data distribution p(y) so that we can draw a new text sample efficiently. Flow language models choose a continuous embedding 
+
+y 7 → x ∈ RL×d and a decoder x 7 → y, and model the induced distribution p(x) on the embedding space, generating ˆx ∼ p(x) and then rounding into discrete language through ˆx 7 → ˆy.To model the now-continuous data distribution p(x), flow language models use flow matching over a stochastic interpolant (Lipman et al., 2022; Albergo et al., 2025). They specify a probability path 
+
+pt(xt) over t ∈ [0 , 1] as the density of an interpolant It := (1 − t)x0 + tx1 between noise x0 ∼ p0
+
+and data x1 ∼ p1. The path pt admits a deterministic evolution equation that can be used to draw a sample xt ∼ pt at inference time: 
+
+˙xt = bt(xt), bt(x) = E[x1 − x0 | It = x], x0 ∼ p0, t ∈ [0 , 1] , (1) where bt is the velocity field of the flow. If a model ˆb of the velocity is available, a sample ˆx1 ∼ p1
+
+can be approximately drawn by numerically integrating (1) across a time grid 0 = t0 < ... < t N = 1 .2Preprint. Under review. A simple choice for the integration is the forward Euler scheme: 
+
+ˆxti+1 = ˆ xti + ( ti+1 − ti)ˆbti (ˆ xti ), ˆx0 ∼ p0. (2) Instead of learning the velocity directly, it is more common in language modeling to learn the denoiser 
+
+Dt (Lee et al., 2026; Hu et al., 2026) which outputs the mean of clean data, and from which one can recover the velocity (Albergo et al., 2025; Li & He, 2026): 
+
+Dt(x) := E[x1 | It = x], bt(x) = Dt(x) − x
+
+1 − t . (3) The ideal denoiser D can be learned in practice by solving a regression problem D = argmin ˆD L( ˆD)
+
+that predicts clean data by minimizing the following loss: 
+
+L( ˆD) := 
+
+Z 10
+
+E| ˆDt(It) − x1|2dt. (4) While we have used square loss above, our discussions and results readily transfer to the cross-entropy setting of Dieleman et al. (2022); Eijkelboom et al. (2024); Lee et al. (2026). With a learned denoiser 
+
+ˆD, generation can be done by turning it into an estimation of the velocity ˆb through (3) and then leveraging the forward Euler scheme (2). 
+
+Flow map language models. A key advantage of continuous flow for language modeling is that its deterministic generative process (1) driven by the velocity bt defines a unique flow map 
+
+Xs,t : RL×d → RL×d, the solution operator that transports a sample directly xt = Xs,t (xs) between any timesteps (s, t ) ∈ [0 , 1] 2. It satisfies the following integral equation: 
+
+Xs,t (xs) = xs +
+
+Z ts
+
+bτ (xτ ) d τ. (5) If available, a flow map allows for efficient few-step generation by sequentially evaluating ˆxti+1 =
+
+Xti,t i+1 (ˆ xti ) upon any grid 0 = t0 < ... < t N = 1 , even one-step generation via ˆx1 = X0,1(ˆ x0).Recent works have demonstrated that flow map language models can be learned by distilling the flow velocity learned by flow language models (Lee et al., 2026; Roos et al., 2026; Potaptchik et al., 2026). These methods leverage a set of mathematical relations between the flow velocity and the flow map (Boffi et al., 2026; Lee et al., 2026), which are derivable from the integral equation in (5) ,and learn the flow map with respect to a given flow velocity to satisfy these relations. 
+
+# 3 THEORETICAL FRAMEWORK 
+
+In this section, we formalize self-conditioning and propose that it learns a fixed-point iteration which refines the denoising prediction. We then develop fixed-point flows, a framework for self-conditioned flows, along with the associated flow maps for few-step generation. Finally, we introduce distillation methods for turning self-conditioned flow language models into few-step language models. 3.1 SELF -CONDITIONED FLOW LANGUAGE MODELS 
+
+Self-conditioning is a technique introduced in Chen et al. (2022) where the denoiser learns to predict conditioned on its own denoising estimates. In these approaches, the model of the denoiser (3) takes an additional conditioning, ˆDt(x, z), which effectively reduces to a usual denoiser model when z = 0.The denoiser is trained using the following loss, where μ is a choice of training-time distribution of z:
+
+Lμ( ˆD) := 
+
+Z 10
+
+Ex0,x1 Eμ| ˆDt(It, z) − x1|2dt. (6) A common choice of μ is the mixture of delta peaks at zero z = 0 and the model’s own denoising prediction z = sg ( ˆDt(It, 0)) where sg is the stop-gradient operator. This leads to the following: 
+
+Lμ( ˆD) = 12
+
+Z 10
+
+E| ˆDt(It, 0) − x1|2dt + 12
+
+Z 10
+
+E| ˆDt(It, sg ( ˆDt(It, 0))) − x1|2dt, (7) 3Preprint. Under review. where the first term is the usual denoising loss (4) , whereas the second term is a self-conditioned loss which encourages correcting an initial estimate by the model. In general, the conditioning variable z in the training loss (6) does not change the learning target of the denoiser. This is because the Bayes-optimal prediction of x1 given an interpolant It is specified by the ideal denoiser, Dt(It) (3) , regardless of z, assuming z does not leak additional information about x1 beyond what is available from It, as in (7) . Thus, the objective trains the model to map every on-distribution conditioning z to the ideal denoising target. We provide a formal proof: 
+
+Proposition 3.1. Assume that z ⊥ x1 | It for almost every t, and assume all second moments are finite. Then every unrestricted population minimizer ¯D of (6) satisfies 
+
+¯Dt(x, z) = Dt(x) (8) 
+
+almost surely under the law of (It, z), for almost every t.
+
+A proof is in Appendix A.1. In practice, training would not attain the minimum loss and the model would have dependence on z. With the self-conditioned loss (7) , this can encourage a self-correcting behavior that produces an initial prediction and then pulls it closer to the Bayes-optimal prediction. The generative process under self-conditioning is similar to that of (1) , evolving a sample ˆxti across a flow-time grid 0 = t0 < ... < t N = 1 . Yet, the denoising estimate is also maintained and updated as 
+
+ˆzti to condition and bootstrap the denoiser, altering the numerical integration scheme (2) as follows: 
+
+ˆxti+1 = ˆ xti + ( ti+1 − ti)ˆbti , ˆbti = ˆzti+1 − ˆxti
+
+1 − ti
+
+, ˆx0 ∼ p0,
+
+ˆzti+1 = ˆDti (ˆ xti , ˆzti ), ˆz0 = 0.
+
+(9) Intuitively, this creates an information sharing across flow timesteps via ˆz on top of the flow state ˆx.Although self-conditioning empirically leads to substantial improvements of flow language mod-els (Chen et al., 2026; Hu et al., 2026; Batzolis et al., 2026; Meshchaninov et al., 2026; Yang et al., 2026), understanding of its mechanism is limited (Chen et al., 2022; Dieleman et al., 2022; Shabalin et al., 2025; 2026). Furthermore, since the self-conditioned velocity (9) is no longer autonomous on the flow state but now also coupled with the updates of the denoising estimates, it is unclear how to use it for few-step distillation, which relies on the existence of the flow map characterized as a purely integral solution of the flow velocity (5). 3.2 SELF -CONDITIONING INDUCES A FIXED -POINT ITERATION 
+
+We present our key intuition that a self-conditioned denoiser, trained with (7) , learns to improve its own predictions, implementing an iteration that approximately converges toward the ideal denoiser. Formally, a self-conditioned denoiser ˆD(x, z), given a choice of flow timestep t and flow state x, can be used to define the following iteration zj for j = 0 , 1, ... that starts at some initialization z0:
+
+zj+1 = ˆDt(x, zj ). (10) As the denoiser learns to correct its own prediction (7) , we posit that it characterizes a self-correcting process, eventually reaching a fixed point z⋆ = ˆDt(x, z⋆) (Gulrajani & Hashimoto, 2023). We could think of this fixed point as a self-corrected approximation of the Bayes-optimal prediction Dt(x),since it is the learning target as shown in Proposition 3.1. We make this intuition precise with a series of theoretical results. First, we recall the notion of a contraction, which suffices for convergence to a unique fixed point. 
+
+Definition 3.2 (Contraction). A function f : Rd → Rd is a contraction on a closed set O ⊆ Rd
+
+with factor 0 ≤ η < 1 if it satisfies f (O) ⊆ O and |f (z) − f (z′)| ≤ η|z − z′| for every z, z′ ∈ O.By Proposition 3.1, a perfect denoiser ¯Dt(x, ·) with minimum loss maps directly to Dt(x), making it a contraction with η = 0 . When the denoiser ˆD is learned, it is not always guaranteed to be contractive. Yet, in Appendix A.2, we show that optimizing self-conditioned loss leads to approximate contractivity. 4Preprint. Under review. To simplify our analysis, we shall henceforth assume that the learned denoiser is contractive. This is in line with common assumptions in looped models (Romano et al., 2017; Ryu et al., 2019; Bai et al., 2019; Fung et al., 2022; Movahedi et al., 2026) and supported by our results that self-conditioned models ELF (Hu et al., 2026) and LangFlow (Chen et al., 2026) approximate fixed-point iterations. We show: 
+
+Proposition 3.3. Fix t, x, and 0 ≤ η < 1. Assume that ˆDt(x, ·) is a contraction on a nonempty closed set O ⊆ RL×d with factor η. Then, the iteration zj+1 = ˆDt(x, zj ) (10) from any z0 ∈ O
+
+satisfies the following properties: (i) It converges exponentially to a unique fixed point z⋆ ∈ O,(ii) Its denoising error at any iteration j ≥ 0 is bounded as 
+
+|zj − Dt(x)| ≤ | ˆDt(x, z0) − Dt(x)| + η − ηj
+
+1 − η |z1 − z0|. (11) 
+
+(iii) Its denoising error at the fixed point is bounded as 
+
+|z⋆ − Dt(x)| ≤ | ˆDt(x, z0) − Dt(x)| + η
+
+1 − η |z1 − z0|, (12) A proof is in Appendix A.3. The result shows that the denoising loss at the initialization, together with the magnitude of the first iteration, controls the denoising error bound of multi-step iterations during inference up to the fixed point. It further shows that the error bound improves with iterations. Having formulated the relationship between a self-conditioned denoiser ˆD and its fixed points for each pair of t and x, it is convenient to think of a function that directly predicts the fixed point. We call such a function the fixed-point denoiser D⋆, defined as follows for every t ∈ [0 , 1] , x ∈ RL×d:
+
+D⋆t (x) := z⋆ = ˆDt(x, z⋆). (13) where z⋆ is the unique fixed point of ˆDt(x, ·). The fixed-point denoiser is a self-conditioning-free denoiser that behaves the same as the given self-conditioned denoiser run until convergence. Its ideal target under Proposition 3.1 is the Bayes-optimal prediction Dt(x), in which case we have D⋆ = D.3.3 FIXED -POINT FLOWS 
+
+In Section 3.1, we have seen that self-conditioned flow appears to involve two states: the flow state and the self-conditioning state. In Section 3.2, we have established that a self-conditioned denoiser induces a fixed-point iteration. Here, we propose to replace the self-conditioning state by its fixed point. Once this is done, the velocity depends only on the flow state, so it becomes an ordinary flow. We call this a fixed-point flow , and prove its fundamental properties as follows. 
+
+Proposition 3.4. Assume that, for every t ∈ [0 , 1) and x, the self-conditioned denoiser ˆDt(x, ·)
+
+has a unique fixed point D⋆t (x) = ˆDt(x, D ⋆t (x)) . Define the fixed-point velocity 
+
+b⋆t (x) := D⋆t (x) − x
+
+1 − t , t ∈ [0 , 1) . (14) 
+
+Then b⋆t depends only on t and x, and therefore the dynamics 
+
+˙xt = b⋆t (xt) (15) 
+
+define an ordinary time-dependent ODE. Furthermore, when the fixed-point denoiser is Bayes optimal, D⋆ = D, the fixed-point velocity recovers the true velocity, b⋆ = b.
+
+A proof is in Appendix A.4. Equation (14) says that at each flow time, the self-conditioned denoiser 
+
+ˆD runs fixed-point iteration (10) until convergence, and the fixed point modulates the flow via (14) .This suggests an Euler scheme for sampling ˆx1 ∼ p1 over a flow-time grid 0 = t0 < ... < t N = 1 :
+
+ˆxti+1 = ˆ xti + ( ti+1 − ti) ˆz⋆ti − ˆxti
+
+1 − ti
+
+, (16) 5Preprint. Under review. where each ˆz⋆ti is obtained by solving an inner fixed-point iteration from an initialization ˆz0 
+
+> ti
+
+:
+
+ˆzj+1  
+
+> ti
+
+= ˆDti (ˆ xti , ˆzjti ). (17) If the fixed-point iteration is run until convergence, how it is initialized must not affect the outcome. Therefore, a simple and valid approach is to always initialize with zero, ˆz0 
+
+> ti
+
+= 0, which we call 
+
+cold-start sampling of a fixed-point flow. On the other hand, choosing the right initialization can improve the efficiency of finding the fixed point. This can be done, for instance, with the fixed-point estimate of the previous flow timestep, ˆz0 
+
+> ti
+
+= ˆ z⋆ti−1 . We call this warm-start sampling , and show: 
+
+Proposition 3.5. In the setting of Proposition 3.3, if |z0 − z⋆| > ε , then it is enough to take 
+
+j ≥ log |z0 − z⋆|/ε 
+
+log(1 /η ) (18) 
+
+iterations to guarantee |zj − z⋆| ≤ ε.
+
+A proof is given in Appendix A.5. The result shows that initializing closer to the fixed point improves convergence, which is the case for warm-start sampling if the fixed points are correlated locally in t.With this, we can view conventional self-conditioned generation in (9) as warm-start sampling that approximates fixed points with a single iteration, ˆz⋆ti ≈ ˆDti (ˆ xti , ˆz⋆ti−1 ). This implies that the coupling of flow state and self-conditioning state in (9) is not a defining property of self-conditioned flows, as it is merely a byproduct of warm starts, a sampling heuristic. We indeed find that cold-start sampling with sufficient fixed-point iterations can replace warm starts in ELF (Hu et al., 2026) and LangFlow (Chen et al., 2026). Taking this idea further, we find that it is possible to take a self-conditioned flow model and turn it into a self-conditioning-free model by distilling the self-conditioned denoiser ˆD into the fixed-point denoiser D⋆. This can be done, for instance, via the following fixed-point distillation loss: 
+
+L(D⋆) = 
+
+Z 10
+
+E|D⋆t (It) − z⋆|2 dt, z⋆ = ˆDt(It, z⋆), (19) where the target z⋆ is estimated by iterating zj+1 = ˆDt(It, zj ) from z0 = 0. Any other fixed-point distillation method can be used instead of (19) , such as consistency distillation (Lin et al., 2026). The resulting fixed-point velocity b⋆ is autonomous, so its generation can use the usual Euler scheme (2) .3.4 FIXED -POINT FLOW MAPS 
+
+In Section 3.3, we have formalized fixed-point flows, which express self-conditioned flows via ordinary velocity fields. We leverage this insight to define their associated flow maps, which allows us to design few-step distillation methods for self-conditioned flow language models. 
+
+Proposition 3.6. On any interval where the fixed-point flow ODE (15) has unique solutions, the 
+
+fixed-point flow map , its solution operator X⋆s,t (xs) = xt, satisfies 
+
+X⋆s,t (x) = x +
+
+Z ts
+
+b⋆τ (xτ ) d τ. (20) 
+
+Moreover, for 0 ≤ s ≤ u ≤ t < 1,
+
+X⋆s,t = X⋆u,t ◦ X⋆s,u . (21) A proof is in Appendix A.6. The result shows that X⋆ is a valid flow map and admits conditions such as (21) that can be leveraged to learn it through distillation from the velocity b⋆t . In order to learn the flow map, we parameterize it with a two-time denoiser δs,t defined as follows (Lee et al., 2026; Lu et al., 2026): 
+
+δs,t (x) := x + (1 − s)vs,t (x), (22) where vs,t is the average velocity from s to t, defined as follows (Boffi et al., 2026): 
+
+vs,t (x) := X⋆s,t (x) − x
+
+t − s , vt,t (x) := b⋆t (x). (23) 6Preprint. Under review. Analogous to the relationship between the single-time denoiser and velocity, D⋆t (x) = x + (1 −
+
+t)b⋆t (x), the two-time denoiser can be viewed as a single denoising step to the clean data domain. Its outputs are known to lie in a low-dimensional manifold (Lee et al., 2026; Lu et al., 2026), making learning easier. We now show: 
+
+Proposition 3.7. The two-time denoiser δs,t satisfies the following properties: (i) For 0 ≤ s < t < 1, the flow map is recovered from δs,t by 
+
+X⋆s,t (x) = 1 − t
+
+1 − s x + t − s
+
+1 − s δs,t (x). (24) 
+
+(ii) On the diagonal, 
+
+δt,t (x) = D⋆t (x). (25) 
+
+(iii) For 0 ≤ s < u < t < 1, the semigroup condition (21) is equivalent to 
+
+δs,t (x) = γδ s,u (x) + (1 − γ)δu,t (X⋆s,u (x)) , (26) 
+
+where γ = (1 −t)( u−s)(1 −u)( t−s) ∈ [0 , 1] .
+
+A proof is in Appendix A.7. The result shows that learning the two-time denoiser yields the flow map, and that the two-time denoiser matches the fixed-point denoiser D⋆ (13) on the diagonal s = t, while satisfying a self-consistency criterion off the diagonal. These conditions lead to a learning objective: 
+
+Proposition 3.8. Consider the population objective 
+
+L(δ) = Es,u,t, x|δs,t (x) − sg (T (δ)s,u,t (x)) |2 + Et, x|δt,t (x) − D⋆t (x)|2 (27) 
+
+where 
+
+T (δ)s,u,t (x) := γδ s,u (x) + (1 − γ)δu,t 
+
+ X⋆s,u (x). (28) 
+
+Then the true two-time denoiser has zero loss. Conversely, any zero-loss solution satisfies the diagonal (25) and semigroup (26) conditions almost surely under the training distribution. 
+
+A proof is given in Appendix A.8. The first loss term enforces the semigroup condition, and the second loss term anchors the diagonal to the fixed point D⋆t (It) = z⋆ = ˆDt(It, z⋆). Evaluating the latter requires fixed points z⋆, which we may make available in one of two ways: an offline route that first distills the fixed-point denoiser D⋆ as a separate model via (19) , or an online route that performs two compressions in (19) and (27) jointly, estimating z⋆ with a few iterations of zj+1 = ˆDt(It, zj )
+
+from z0 = 0. The online approach ultimately achieves δt,t ≈ D⋆t without training a separate model. 
+
+# 4 EXPERIMENTS 
+
+Through our experiments, we aim to answer the following key questions: 
+
+Q1 . Do self-conditioned flow language models learn fixed-point iterations? 
+
+Q2 . Is self-conditioned generation merely offering better initialization of fixed points? 
+
+Q3 . Can we train self-conditioning-free flows competitive with self-conditioned ones? 
+
+Q4 . Can we train a flow map language model that leverages self-conditioning? 
+
+Setup. We conduct all experiments on the OpenWebText dataset (Gokaslan et al., 2019), a standard corpus for language modeling, with a sequence length of 1024 tokens. We assess generation quality with generative perplexity (gPPL) (Dieleman et al., 2022; Sahoo et al., 2025) measured with pretrained GPT-2 Large (Radford et al., 2019), together with average per-sample unigram entropy. We regard a model as strong only when its generations attain low gPPL while remaining close to the data entropy of 5.44 nats (Lee et al., 2026). We use 256 generated samples for analysis (Section 4.1) and 1024 for distillation (Section 4.2). See Appendix B for more experimental details. 7Preprint. Under review. 0 50 100 150 200     
+
+> fixed-point iteration j
+> 0.00
+> 0.25
+> 0.50
+> 0.75
+> 1.00
+> ‖zj − z ∗ ‖/‖z ∗ ‖
+> ELF 050 100 150 200
+> fixed-point iteration j
+> 0.00
+> 0.25
+> 0.50
+> 0.75
+> 1.00
+> ‖zj − z ∗ ‖ / ‖z ∗ ‖
+> LangFlow
+
+Figure 2: Convergence towards the fixed point across fixed-point iterations. Table 1: Effect of fixed-point iterations. Increasing the iterations enhances generation quality. 
+
+ELF (32 steps), # FPIs 1 2 3 4 5
+
+gPPL ↓ 101.19 66.50 56.67 50.25 46.31 entropy 5.51 5.42 5.37 5.33 5.31 LangFlow (64 steps), # FPIs 1 2 3 4 5
+
+gPPL ↓ 77.26 57.99 52.63 49.37 47.27 entropy 5.49 5.42 5.40 5.38 5.36 4.75 5.00 5.25 5.50    
+
+> Entropy
+> 0
+> 50
+> 100
+> 150
+> 200
+> gPPL
+> ELF
+> warm (1 FPIs)
+> cold (1 FPIs)
+> warm (100 FPIs)
+> cold (100 FPIs) 5.00 5.25 5.50 5.75
+> Entropy
+> 0
+> 50
+> 100
+> 150
+> 200
+> gPPL
+> LangFlow
+> warm (1 FPIs)
+> cold (1 FPIs)
+> warm (100 FPIs)
+> cold (100 FPIs)
+
+Figure 3: Warm-start and cold-start sampling with 1 and 100 fixed-point iterations. 4.1 ANALYZING SELF -CONDITIONED FLOW LANGUAGE MODELS 
+
+To answer whether self-conditioned denoisers induce fixed-point iterations ( Q1 ) and whether the gains of self-conditioned sampling come from improved initialization of fixed-point iterations ( Q2 ), we study ELF (Hu et al., 2026) and LangFlow (Chen et al., 2026) as representatives of self-conditioned flow language models on learned embeddings and one-hot token embeddings, respectively. We draw gPPL-entropy frontier curves (Pynadath et al., 2025) by sweeping sampling parameter γ for ELF and softmax temperature for LangFlow. 
+
+Self-conditioning induces a fixed-point iteration (Q1). We first ask whether self-conditioned denoisers learn fixed-point iteration (10) . Following Lin et al. (2026), we track relative distance to the fixed point, |zj − z⋆|/|z⋆|, which equals one at j = 0 when cold-start sampling is used ( z0 = 0). To approximate z⋆, we run 200 damped Picard iterations (Lauriere, 2021) with a fixed damping parameter 0.3 (see Appendix B.1 for details). As shown in Figure 2, the relative distance decays across flow time t for both models. This supports that the models have approximately learned a fixed point iteration as posited in Section 3.2. We now ask whether the fixed-point iteration converges towards the ideal denoiser (Section 3.2). As illustrated in Table 1, gPPL decreases as the number of fixed-point iterations increases on both ELF and LangFlow, whereas entropy remains stable near the data distribution (5.44 nats), showing that taking more steps toward the fixed point produces a better denoiser, agreeing with Proposition 3.3. 
+
+Self-conditioned generation merely offers a better initialization (Q2). In Section 3.3, we viewed conventional generation of self-conditioned flows as a warm-start sampling scheme that attempts to use a better initialization for the fixed-point iteration. Accordingly, we conjectured that cold-start 8Preprint. Under review. Table 2: Comparison with few-step language models on OpenWebText. FMLM ⋆ outperforms all baselines that preserve data-level entropy (5.44 nats). 
+
+Step Metric Duo MDLM FMLM DFM FMLM ⋆
+
+DCD Di4C SDTT Di4C PSD ESD 1 gPPL ↓ 5743.29 370.51 1260.86 1298.80 168.30 180.29 5.33 112.52 
+
+entropy 6.02 3.92 5.26 5.29 5.17 4.91 0.26 5.37 2 gPPL ↓ 891.16 210.22 877.22 758.23 133.29 152.83 108.91 94.74 
+
+entropy 5.41 4.63 5.34 5.35 5.25 5.03 5.15 5.45 4 gPPL ↓ 250.86 154.67 339.73 239.27 111.31 122.32 77.08 75.22 
+
+entropy 5.37 4.85 5.38 5.40 5.26 5.10 5.27 5.41 
+
+sampling would reach a similar performance if sufficient iterations are used as it would eventually find the fixed point regardless of initialization. To validate this, we draw the gPPL–entropy frontier of each sampling scheme in Figure 3. When we use a single fixed-point iteration, warm-start outperforms cold-start sampling, demonstrating that warm-start offers a good initialization around the fixed point. With 100 iterations, however, warm- and cold-start attain the same frontier, indicating that the choice of initialization has a negligible effect on generation once enough fixed-point iterations are run. 4.2 DISTILLING SELF -CONDITIONING INTO FIXED -POINT FLOW MAPS 
+
+To test self-conditioning-free distillation ( Q3 ) and self-conditioned flow map distillation ( Q4 ), we train ELF (Hu et al., 2026) as a teacher model, replacing its encoder with GPT-2 Large (Radford et al., 2019) for tokenizer-matched comparison with baselines. 4.0 4.5 5.0 5.5 
+
+> Entropy
+> 20
+> 40
+> 60
+> gPPL
+> ELF
+> ELF
+
+Figure 4: Comparison between ELF ⋆ and its teacher model ELF. 
+
+Self-conditioning is removable (Q3). We find that, given a self-conditioned denoiser ˆD (ELF in our case), we can learn its associ-ated fixed-point denoiser D⋆ (13) through fixed-point distillation, which yields fixed-point velocity (14) , a self-conditioning-free model. Herein, we consider CDEQ (Lin et al., 2026), an existing fixed-point distillation method. Using the method, we distill the ELF teacher into a self-conditioning-free model ELF ⋆, with im-plementation details provided in Appendix B. We compare 8-step generation performance of ELF ⋆ against 32-step generation of the teacher with gPPL-entropy frontier curves. As in Figure 4, ELF ⋆
+
+matches the teacher’s frontier, confirming that self-conditioning is removable via fixed-point distillation without degrading quality. 3.5 4.0 4.5 5.0 5.5  
+
+> Entropy
+> 20
+> 40
+> 60
+> 80
+> gPPL
+> FMLM (8 step)
+> ELF (32 step)
+> ELF (8 step)
+
+Figure 5: Comparison between FMLM ⋆ and teacher model ELF. 
+
+Self-conditioning is distillable into a flow map (Q4). Finally, we ask whether self-conditioning can be leveraged to train a few-step flow map. To this end, we distill the self-conditioned ELF teacher into a self-conditioned flow map language model 
+
+FMLM ⋆, parameterized by the two-time denoiser δs,t (22). Fol-lowing the offline route proposed in Section 3.4, we take the fixed-point denoiser ELF ⋆ as teacher and learn its associated fixed-point flow map with the semigroup distillation objective (27) . As illus-trated in Figure 5, FMLM ⋆ with 8 generation steps approaches the 32-step frontier of the self-conditioned teacher ELF. We then compare FMLM ⋆ in one-step and few-step generation settings on OpenWebText against recent few-step distillation baselines: discrete diffusion models Duo with DCD (Sahoo et al., 2025), MDLM with SDTT (Deschenaux & Gulcehre, 2024), and both with Di4C (Hayakawa et al., 2024), and continuous flow map language models FMLM (Lee et al., 2026) and DFM (Potaptchik et al., 2026), reporting gPPL and entropy. As shown in Table 2, FMLM ⋆ attains the best gPPL among baselines that preserve data-level entropy (5.44 nats) in the one- and few-step regimes, advancing the state-of-the-art under a matched sampling budget. Qualitative samples can be found in Appendix C. 9Preprint. Under review. Table 3: Comparison of FMLM ⋆ with online and offline fixed-point distillation. The performance of online distillation saturates around 9 fixed-point iterations and nearly matches offline distillation.                                                                
+
+> Step Metric # FPIs for online distillation Offline 1235917 1gPPL ↓176.31 141.06 134.49 121.44 116.74 118.26 112.52
+> entropy 5.47 5.42 5.42 5.41 5.39 5.38 5.37 2gPPL ↓149.51 114.85 109.29 99.98 97.44 98.37 94.74
+> entropy 5.53 5.50 5.49 5.49 5.47 5.47 5.45 4gPPL ↓120.35 90.75 88.20 80.27 79.87 80.05 75.22
+> entropy 5.46 5.45 5.46 5.46 5.45 5.45 5.41 Training times 18h 18h 19h 20h 24h 33h 82h
+
+To reduce training cost, we also consider online distillation, which avoids training a separate fixed-point denoiser (ELF ⋆ in our case). FMLM ⋆ instead distills directly from the self-conditioned teacher (ELF) using a fixed number of cold-start fixed-point iterations at each training step. As shown in Table 3, its performance saturates around 9 FPIs, and the resulting online-distilled FMLM ⋆ achieves competitive quality at approximately 0.3× the training cost of offline-distilled FMLM ⋆. Together, these results show that self-conditioning can be leveraged to build a state-of-the-art few-step flow map through either two-stage offline distillation or cheaper one-stage online distillation ( Q4 ). 
+
+# 5 CONCLUSION 
+
+We demonstrated that the self-conditioned flow language model implicitly learns a fixed-point iteration that refines its own denoising estimate, approximately converging toward the ideal denoiser. Such convergence is provable under a contractivity assumption, and we observe it empirically in existing self-conditioned models. Based on this viewpoint, we proposed fixed-point flows, a class of self-conditioned flows organized along two axes: the flow over time and the fixed-point iteration at each flow time, which also offers an understanding of conventional self-conditioned sampling as a single-step warm-started fixed-point iteration. Building on fixed-point flows, we proposed a method to distill self-conditioned flows into a flow map language model FMLM ⋆ that enables few-step generation while inheriting the excellent performance of self-conditioned flows. On OpenWebText, FMLM ⋆ achieves state-of-the-art one- and few-step generation under matched sampling budgets. 
+
+Limitations and future work. We restrict our flow map learning to the distillation setting which requires a separate teacher model (e.g., ELF or ELF ⋆). A promising next step is extending to self-distillation that only uses data supervision, simultaneously learning the self-conditioned denoiser, fixed-point denoiser, and two-time denoiser in a single model. In addition, we have limited our scope to text data, although our formulation is general and would apply to other modalities such as graphs, images, and videos. Understanding self-conditioning in these modalities would prove interesting. 
+
+# REFERENCES 
+
+Michael Albergo, Nicholas M Boffi, and Eric Vanden-Eijnden. Stochastic interpolants: A unifying framework for flows and diffusions. Journal of Machine Learning Research , 26(209):1–80, 2025. Shaojie Bai, J Zico Kolter, and Vladlen Koltun. Deep equilibrium models. Advances in neural information processing systems , 32, 2019. Georgios Batzolis, Mark Girolami, and Luca Ambrogioni. Towards closing the autoregressive gap in language modeling via entropy-gated continuous bitstream diffusion. arXiv preprint arXiv:2605.07013 , 2026. Nicholas Boffi, Michael Albergo, and Eric Vanden-Eijnden. How to build a consistency model: Learning flow maps via self-distillation. Advances in Neural Information Processing Systems , 38: 33346–33382, 2026. 10 Preprint. Under review. Jannis Chemseddine, Gregor Kornhardt, and Gabriele Steidl. Spherical flows for sampling categorical data. arXiv preprint arXiv:2605.05629 , 2026. Ting Chen, Ruixiang Zhang, and Geoffrey Hinton. Analog bits: Generating discrete data using diffusion models with self-conditioning. arXiv preprint arXiv:2208.04202 , 2022. Yuxin Chen, Chumeng Liang, Hangke Sui, Ruihan Guo, Chaoran Cheng, Jiaxuan You, and Ge Liu. Langflow: Continuous diffusion rivals discrete in language modeling. arXiv preprint arXiv:2604.11748 , 2026. Justin Deschenaux and Caglar Gulcehre. Beyond autoregression: Fast llms via self-distillation through time. arXiv preprint arXiv:2410.21035 , 2024. Justin Deschenaux and Caglar Gulcehre. Language modeling with hyperspherical flows. arXiv preprint arXiv:2605.11125 , 2026. Sander Dieleman, Laurent Sartran, Arman Roshannai, Nikolay Savinov, Yaroslav Ganin, Pierre H Richemond, Arnaud Doucet, Robin Strudel, Chris Dyer, Conor Durkan, et al. Continuous diffusion for categorical data. arXiv preprint arXiv:2211.15089 , 2022. Floor Eijkelboom, Grigory Bartosh, Christian A Naesseth, Max Welling, and Jan-Willem van de Meent. Variational flow matching for graph generation. Advances in Neural Information Processing Systems , 37:11735–11764, 2024. Samy Wu Fung, Howard Heaton, Qiuwei Li, Daniel McKenzie, Stanley Osher, and Wotao Yin. Jfb: Jacobian-free backpropagation for implicit networks. In Proceedings of the AAAI Conference on Artificial Intelligence , volume 36, pp. 6648–6656, 2022. Aaron Gokaslan, Vanya Cohen, Ellie Pavlick, and Stefanie Tellex. Openwebtext corpus. http: //Skylion007.github.io/OpenWebTextCorpus , 2019. Ishaan Gulrajani and Tatsunori B Hashimoto. Likelihood-based diffusion language models. Advances in Neural Information Processing Systems , 36:16693–16715, 2023. Satoshi Hayakawa, Yuhta Takida, Masaaki Imaizumi, Hiromi Wakaki, and Yuki Mitsufuji. Distillation of discrete diffusion through dimensional correlations. arXiv preprint arXiv:2410.08709 , 2024. Keya Hu, Linlu Qiu, Yiyang Lu, Hanhong Zhao, Tianhong Li, Yoon Kim, Jacob Andreas, and Kaiming He. Elf: Embedded language flows. arXiv preprint arXiv:2605.10938 , 2026. Dongjun Kim, Chieh-Hsin Lai, WeiHsiang Liao, Naoki Murata, Yuhta Takida, Toshimitsu Uesaka, Yu-tong He, Yuki Mitsufuji, and Stefano Ermon. Consistency trajectory models: Learning probability flow ode trajectory of diffusion. In ICLR , 2024. Mathieu Lauriere. Numerical methods for mean field games and mean field type control. arXiv preprint arXiv:2106.06231 , 2021. Chanhyuk Lee, Jaehoon Yoo, Manan Agarwal, Sheel Shah, Jerry Huang, Aditi Raghunathan, Se-unghoon Hong, Nicholas M Boffi, and Jinwoo Kim. Flow map language models: One-step language modeling via continuous denoising. arXiv preprint arXiv:2602.16813 , 2026. Tianhong Li and Kaiming He. Back to basics: Let denoising generative models denoise. In 
+
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pp. 36115–36125, 2026. Junchao Lin, Zenan Ling, Jingwen Xu, and Robert C Qiu. Consistency deep equilibrium models. 
+
+arXiv preprint arXiv:2602.03024 , 2026. Yaron Lipman, Ricky TQ Chen, Heli Ben-Hamu, Maximilian Nickel, and Matt Le. Flow matching for generative modeling. arXiv preprint arXiv:2210.02747 , 2022. Yiyang Lu, Susie Lu, Qiao Sun, Hanhong Zhao, Zhicheng Jiang, Xianbang Wang, Tianhong Li, Zhengyang Geng, and Kaiming He. One-step latent-free image generation with pixel mean flows. 
+
+arXiv preprint arXiv:2601.22158 , 2026. 11 Preprint. Under review. Viacheslav Meshchaninov, Alexander Shabalin, Egor Chimbulatov, Nikita Gushchin, Ilya Koziev, Alexander Korotin, and Dmitry Vetrov. How to train your latent diffusion language model jointly with the latent space. arXiv preprint arXiv:2605.07933 , 2026. Sajad Movahedi, Vera Milovanovi ´c, Shlomo Libo Feigin, Alexander Theus, Thomas Hofmann, Valentina Boeva, T Konstantin Rusch, and Antonio Orvieto. Fixed-point reasoners: Stable and adaptive deep looped transformers. arXiv preprint arXiv:2606.18206 , 2026. Peter Potaptchik, Jason Yim, Adhi Saravanan, Peter Holderrieth, Eric Vanden-Eijnden, and Michael S Albergo. Discrete flow maps. arXiv preprint arXiv:2604.09784 , 2026. Patrick Pynadath, Jiaxin Shi, and Ruqi Zhang. Candi: Hybrid discrete-continuous diffusion models. 
+
+arXiv preprint arXiv:2510.22510 , 2025. Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei, Ilya Sutskever, et al. Language models are unsupervised multitask learners. OpenAI blog , 1(8):9, 2019. Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael Matena, Yanqi Zhou, Wei Li, and Peter J Liu. Exploring the limits of transfer learning with a unified text-to-text transformer. Journal of machine learning research , 21(140):1–67, 2020. Yaniv Romano, Michael Elad, and Peyman Milanfar. The little engine that could: Regularization by denoising (red). SIAM journal on imaging sciences , 10(4):1804–1844, 2017. Daan Roos, Oscar Davis, Floor Eijkelboom, Michael Bronstein, Max Welling, Ismail Ilkan Cey-lan, Luca Ambrogioni, and Jan-Willem van de Meent. Categorical flow maps. arXiv preprint arXiv:2602.12233 , 2026. Ernest Ryu, Jialin Liu, Sicheng Wang, Xiaohan Chen, Zhangyang Wang, and Wotao Yin. Plug-and-play methods provably converge with properly trained denoisers. In International Conference on Machine Learning , pp. 5546–5557. PMLR, 2019. Amirmojtaba Sabour, Sanja Fidler, and Karsten Kreis. Align your flow: Scaling continuous-time flow map distillation. Advances in Neural Information Processing Systems , 38:146459–146512, 2026. Subham Sekhar Sahoo, Justin Deschenaux, Aaron Gokaslan, Guanghan Wang, Justin Chiu, and Volodymyr Kuleshov. The diffusion duality. arXiv preprint arXiv:2506.10892 , 2025. Alexander Shabalin, Viacheslav Meshchaninov, Egor Chimbulatov, Vladislav Lapikov, Roman Kim, Grigory Bartosh, Dmitry Molchanov, Sergey Markov, and Dmitry Vetrov. Tencdm: Understanding the properties of the diffusion model in the space of language model encodings. In Proceedings of the AAAI Conference on Artificial Intelligence , volume 39, pp. 25110–25118, 2025. Alexander Shabalin, Simon Elistratov, Viacheslav Meshchaninov, Ildus Sadrtdinov, and Dmitry Vetrov. Why gaussian diffusion models fail on discrete data? arXiv preprint arXiv:2604.02028 ,2026. Robin Strudel, Corentin Tallec, Florent Altch ´e, Yilun Du, Yaroslav Ganin, Arthur Mensch, Will Grathwohl, Nikolay Savinov, Sander Dieleman, Laurent Sifre, et al. Self-conditioned embedding diffusion for text generation. arXiv preprint arXiv:2211.04236 , 2022. Zhihan Yang, Wei Guo, Shuibai Zhang, Subham Sekhar Sahoo, Yongxin Chen, Arash Vahdat, Morteza Mardani, and John Thickstun. Continuous diffusion scales competitively with discrete diffusion for language. arXiv preprint arXiv:2605.18530 , 2026. 12 Preprint. Under review. 
+
+# A PROOFS 
+
+A.1 PROOF OF PROPOSITION 3.1 
+
+Proposition 3.1. Assume that z ⊥ x1 | It for almost every t, and assume all second moments are finite. Then every unrestricted population minimizer ¯D of (6) satisfies 
+
+¯Dt(x, z) = Dt(x) (8) 
+
+almost surely under the law of (It, z), for almost every t.
+
+Proof. Fix t for which the conditional independence assumption holds, and write 
+
+D := Dt(It), U := ˆDt(It, z).
+
+Then 
+
+x1 − U = ( x1 − D) + ( D − U ).
+
+Squaring and taking expectations gives 
+
+E|x1 − U |2 = E|x1 − D|2 + E|U − D|2 + 2 E⟨x1 − D, D − U ⟩.
+
+The cross term vanishes. Indeed, 
+
+E[x1 − D | It, z] = E[x1 | It, z] − Dt(It).
+
+By the conditional independence assumption, 
+
+E[x1 | It, z] = E[x1 | It] = Dt(It).
+
+Hence 
+
+E[x1 − D | It, z] = 0 ,
+
+and therefore 
+
+E⟨x1 − D, D − U ⟩ = 0 .
+
+Thus 
+
+E| ˆDt(It, z) − x1|2 = E|x1 − Dt(It)|2 + E| ˆDt(It, z) − Dt(It)|2.
+
+The first term does not depend on ˆDt. The second term is minimized exactly when 
+
+ˆDt(It, z) = Dt(It)
+
+almost surely under the law of (It, z). Integrating over t gives the claim. A.2 PROOF OF APPROXIMATE CONTRACTIVITY 
+
+We show that learning the self-conditioned objective leads to an approximate notion of contractivity. 
+
+Definition A.1 (A simplified self-conditioned regression.). Let O ⊆ Rd be a nonempty and closed set, let Z ∼ μ with μ(O) = 1 , let X ∈ Rd be fixed, and let f : Rd → Rd be a continuous function. For some 0 < p < 1, we define the following self-conditioned regression objective: 
+
+L(f ) := pE|f (Z) − X|2 + (1 − p)E|f (f (Z)) − X|2. (29) This is a simplification of our problem setting in Section 3.1. Taking p = 1 /2, f = ˆDt(It, ·), and 
+
+X = Dt(x) (the Bayes-optimal prediction target; Proposition 3.1), for fixed t ∈ [0 , 1] and x, we recover a practical learning scenario for self-conditioned language models similar to (7). Let us fix • a scale w > 0,• a factor 0 ≤ η < 1,• a tolerance r > 0,13 Preprint. Under review. • and a failure probability 0 < ε < 1.Let us assume: ¯B(X, r ) ⊆ O, 2r ≤ ηw, L(f ) ≤ min {p, 1 − p}εr 2. (30) Define 
+
+A := {z ∈ O : |f (z) − X| ≤ r}. (31) The following lemmas show that a sufficiently small loss yields a closed, high-probability set A that is contractive with factor η above the scale w, and approximately forward-invariant under the training distribution with leakage at most ε. Intuitively, the first term in the self-conditioned loss makes the set A high-probability under μ, whereas the second term makes f (Z) remain in A for most Z ∼ μ.
+
+Lemma A.2 (Closedness and approximate forward invariance). A is a closed subset of Rd.Furthermore, f (A) ⊆ O, and it holds that 
+
+μ(A ∩ f −1(A)) ≥ 1 − ε. (32) 
+
+In particular, μ(A) ≥ 1 − ε and 
+
+μ({z ∈ A : f (z) /∈ A}) ≤ ε. (33) 
+
+Proof. The closed Euclidean ball ¯B(X, r ) is closed. Since f is continuous, 
+
+f −1( ¯B(X, r )) 
+
+is closed. Therefore, 
+
+A = O ∩ f −1( ¯B(X, r )) 
+
+is closed because O is closed. For every z ∈ A, we have, by definition, 
+
+|f (z) − X| ≤ r. 
+
+Hence 
+
+f (z) ∈ ¯B(X, r ).
+
+By assumption (30), 
+
+f (A) ⊆ O. 
+
+Define the initial and self-conditioned errors 
+
+e1(z) := |f (z) − X|, e2(z) := |f (f (z)) − X|.
+
+and define 
+
+G := {z ∈ O : e1(z) ≤ r and e2(z) ≤ r}.
+
+The condition e1(z) ≤ r is exactly z ∈ A.Moreover, as we have seen, e1(z) ≤ r implies f (z) ∈ O. Therefore, 
+
+e2(z) ≤ r
+
+is equivalent to 
+
+f (z) ∈ A. 
+
+Consequently, 
+
+G = A ∩ f −1(A).
+
+On the complement Gc, at least one of the inequalities 
+
+e1(z) ≤ r, e2(z) ≤ r
+
+fails. If e1(z) > r , then 
+
+pe 1(z)2 > pr 2 ≥ min {p, 1 − p}r2.
+
+14 Preprint. Under review. If e2(z) > r , then 
+
+(1 − p)e2(z)2 > (1 − p)r2 ≥ min {p, 1 − p}r2.
+
+Thus, for every z /∈ G,
+
+pe 1(z)2 + (1 − p)e2(z)2 ≥ min {p, 1 − p}r2.
+
+Equivalently, 
+
+1(z /∈ G) ≤ pe 1(z)2 + (1 − p)e2(z)2
+
+min {p, 1 − p}r2 .
+
+Taking expectation with respect to Z ∼ μ,
+
+μ(Gc) ≤ E[pe 1(z)2 + (1 − p)e2(z)2]min {p, 1 − p}r2 = L(f )min {p, 1 − p}r2 .
+
+By assumption (30), 
+
+μ(Gc) ≤ ε. 
+
+Therefore, 
+
+μ(G) ≥ 1 − ε. 
+
+Since G = A ∩ f −1(A),
+
+μ(A ∩ f −1(A)) ≥ 1 − ε. 
+
+This implies μ(A) ≥ 1 − ε because A ∩ f −1(A) ⊆ A.It also implies 
+
+μ(A \ f −1(A)) ≤ ε, 
+
+because the event 
+
+A \ f −1(A) = {z ∈ A : f (z) /∈ A}
+
+is contained in Gc.
+
+Lemma A.3 (Approximate contractivity). For every z, z′ ∈ A satisfying |z − z′| ≥ w, one has 
+
+|f (z) − f (z′)| ≤ η|z − z′|. (34) 
+
+Proof. Take arbitrary z, z′ ∈ A. By definition of A,
+
+|f (z) − X| ≤ r, |f (z′) − X| ≤ r. 
+
+By the triangle inequality, 
+
+|f (z) − f (z′)| ≤ | f (z) − X| + |f (z′) − X| ≤ 2r. 
+
+By assumption, 
+
+2r ≤ ηw. 
+
+Therefore, whenever |z − z′| ≥ w,
+
+|f (z) − f (z′)| ≤ 2r ≤ ηw ≤ η|z − z′|.
+
+Hence 
+
+|f (z) − f (z′)| ≤ η|z − z′|
+
+for every pair z, z′ ∈ A separated by at least w.A.3 PROOF OF PROPOSITION 3.3 We first show a useful lemma. 
+
+Lemma A.4. Let f : Rd → Rd be a contraction on a nonempty closed set O ⊆ Rd with factor 
+
+0 ≤ η < 1. Then, there is a unique fixed point z⋆ ∈ O, to which the iteration 
+
+zj+1 = f (zj )
+
+15 Preprint. Under review. 
+
+from any z0 ∈ O converges exponentially. Furthermore, the following holds for any finite 
+
+j ≥ k ≥ 0:
+
+|zj − zk| ≤ ηk − ηj
+
+1 − η |z1 − z0|.
+
+Similarly, the following holds: 
+
+|z⋆ − zk| ≤ ηk
+
+1 − η |z1 − z0|.
+
+Proof. Because O is a closed subset of Rd, it is complete. The map f maps O into itself and is a contraction on O. Therefore, by the Banach fixed-point theorem, f has a unique fixed point z⋆ ∈ O,and the iterates converge to it. A geometric convergence bound follows directly from the contraction property: 
+
+|zj+1 − z⋆| = |f (zj ) − f (z⋆)| ≤ η|zj − z⋆|.
+
+Repeating this inequality gives 
+
+|zj − z⋆| ≤ ηj |z0 − z⋆|. (35) For j ≥ k ≥ 0, telescoping gives 
+
+zj − zk =
+
+> j−1
+
+X
+
+> i=k
+
+(zi+1 − zi).
+
+Taking norms and applying the triangle inequality, 
+
+|zj − zk| =
+
+> j−1
+
+X
+
+> i=k
+
+(zi+1 − zi) ≤
+
+> j−1
+
+X
+
+> i=k
+
+|zi+1 − zi|. (36) Each increment can be bounded using the contraction property: 
+
+|zi+1 − zi| = |f (zi) − f (zi−1)| ≤ η|zi − zi−1|.
+
+Repeating this inequality gives 
+
+|zi+1 − zi| ≤ ηi|z1 − z0|.
+
+Applying this in (36), 
+
+|zj − zk| ≤ 
+
+> j−1
+
+X
+
+> i=k
+
+ηi|z1 − z0|.
+
+The geometric sum is j−1X
+
+> i=k
+
+ηi = ηk − ηj
+
+1 − η .
+
+Thus, 
+
+|zj − zk| ≤ ηk − ηj
+
+1 − η |z1 − z0|.
+
+Finally, since zj → z⋆, continuity of the norm gives 
+
+|z⋆ − zk| = lim  
+
+> j→∞
+
+|zj − zk|.
+
+Therefore, 
+
+|z⋆ − zk| ≤ lim 
+
+> j→∞
+
+ηk − ηj
+
+1 − η |z1 − z0| = ηk
+
+1 − η |z1 − z0|.
+
+16 Preprint. Under review. 
+
+Proposition 3.3. Fix t, x, and 0 ≤ η < 1. Assume that ˆDt(x, ·) is a contraction on a nonempty closed set O ⊆ RL×d with factor η. Then, the iteration zj+1 = ˆDt(x, zj ) (10) from any z0 ∈ O
+
+satisfies the following properties: (i) It converges exponentially to a unique fixed point z⋆ ∈ O,(ii) Its denoising error at any iteration j ≥ 0 is bounded as 
+
+|zj − Dt(x)| ≤ | ˆDt(x, z0) − Dt(x)| + η − ηj
+
+1 − η |z1 − z0|. (11) 
+
+(iii) Its denoising error at the fixed point is bounded as 
+
+|z⋆ − Dt(x)| ≤ | ˆDt(x, z0) − Dt(x)| + η
+
+1 − η |z1 − z0|, (12) 
+
+Proof. Since ˆDt(x, ·) is a contraction on O, by applying Lemma A.4 to it, we have that zj converges exponentially to a unique fixed point z⋆ ∈ O. Furthermore, we have 
+
+|zj − zk| ≤ ηk − ηj
+
+1 − η |z1 − z0|, |z⋆ − zk| ≤ ηk
+
+1 − η |z1 − z0|. (37) By the triangle inequality, 
+
+|zj − Dt(x)| ≤ | zj − ˆDt(x, z0)| + | ˆDt(x, z0) − Dt(x)|.
+
+By the definition of the iteration, 
+
+|zj − Dt(x)| ≤ | zj − z1| + | ˆDt(x, z0) − Dt(x)|.
+
+Using the first part of (37) with k = 1 ,
+
+|zj − Dt(x)| ≤ | ˆDt(x, z0) − Dt(x)| + η − ηj
+
+1 − η |z1 − z0|.
+
+Applying the same argument, with the second part of (37), 
+
+|z⋆ − Dt(x)| ≤ | ˆDt(x, z0) − Dt(x)| + η
+
+1 − η |z1 − z0|.
+
+A.4 PROOF OF PROPOSITION 3.4 
+
+Proposition 3.4. Assume that, for every t ∈ [0 , 1) and x, the self-conditioned denoiser ˆDt(x, ·)
+
+has a unique fixed point D⋆t (x) = ˆDt(x, D ⋆t (x)) . Define the fixed-point velocity 
+
+b⋆t (x) := D⋆t (x) − x
+
+1 − t , t ∈ [0 , 1) . (14) 
+
+Then b⋆t depends only on t and x, and therefore the dynamics 
+
+˙xt = b⋆t (xt) (15) 
+
+define an ordinary time-dependent ODE. Furthermore, when the fixed-point denoiser is Bayes optimal, D⋆ = D, the fixed-point velocity recovers the true velocity, b⋆ = b.
+
+Proof. By definition, D⋆t (x) is obtained by solving the inner self-conditioning fixed-point problem at the pair (t, x). Hence, after taking the fixed point, there is no remaining conditioning variable z.Therefore 
+
+b⋆t (x) = D⋆t (x) − x
+
+1 − t
+
+is a function only of t and x.17 Preprint. Under review. The sampling dynamics are therefore the ordinary ODE 
+
+˙xt = b⋆t (xt).
+
+When the fixed point matches the Bayes-optimal denoiser, D⋆ = D, then by (1), we have that 
+
+b⋆t (x) = Dt(x) − x
+
+1 − t = bt(x).
+
+Therefore, the fixed-point velocity recovers the true velocity. A.5 PROOF OF PROPOSITION 3.5 
+
+Proposition 3.5. In the setting of Proposition 3.3, if |z0 − z⋆| > ε , then it is enough to take 
+
+j ≥ log |z0 − z⋆|/ε 
+
+log(1 /η ) (18) 
+
+iterations to guarantee |zj − z⋆| ≤ ε.
+
+Proof. From the geometric convergence bound (35) in Lemma A.4, 
+
+|zj − z⋆| ≤ ηj |z0 − z⋆|.
+
+In the nontrivial case |z0 − z⋆| > ε , it is enough to require 
+
+ηj |z0 − z⋆| ≤ ε. 
+
+Taking logarithms and using log η < 0 gives 
+
+j ≥ log |z0 − z⋆|/ε 
+
+log(1 /η ) .
+
+A.6 PROOF OF PROPOSITION 3.6 
+
+Proposition 3.6. On any interval where the fixed-point flow ODE (15) has unique solutions, the 
+
+fixed-point flow map , its solution operator X⋆s,t (xs) = xt, satisfies 
+
+X⋆s,t (x) = x +
+
+Z ts
+
+b⋆τ (xτ ) d τ. (20) 
+
+Moreover, for 0 ≤ s ≤ u ≤ t < 1,
+
+X⋆s,t = X⋆u,t ◦ X⋆s,u . (21) 
+
+Proof. Since (15) is an ODE, it defines the flow map X⋆s,t (xs) = xt wherever the ODE solution is unique. Uniqueness also gives the composition law: evolving from s to t is the same as first evolving from s to u, and then from u to t. Thus 
+
+X⋆s,t = X⋆u,t ◦ X⋆s,u .
+
+A.7 PROOF OF PROPOSITION 3.7 
+
+Proposition 3.7. The two-time denoiser δs,t satisfies the following properties: 
+
+18 Preprint. Under review. 
+
+(i) For 0 ≤ s < t < 1, the flow map is recovered from δs,t by 
+
+X⋆s,t (x) = 1 − t
+
+1 − s x + t − s
+
+1 − s δs,t (x). (24) 
+
+(ii) On the diagonal, 
+
+δt,t (x) = D⋆t (x). (25) 
+
+(iii) For 0 ≤ s < u < t < 1, the semigroup condition (21) is equivalent to 
+
+δs,t (x) = γδ s,u (x) + (1 − γ)δu,t (X⋆s,u (x)) , (26) 
+
+where γ = (1 −t)( u−s)(1 −u)( t−s) ∈ [0 , 1] .
+
+Proof. First, by definition, 
+
+δs,t (x) = x + (1 − s)vs,t (x).
+
+Therefore 
+
+vs,t (x) = δs,t (x) − x
+
+1 − s .
+
+Substituting this into 
+
+X⋆s,t (x) = x + ( t − s)vs,t (x)
+
+gives 
+
+X⋆s,t (x) = x + t − s
+
+1 − s
+
+ δs,t (x) − x.
+
+Rearranging gives 
+
+X⋆s,t (x) = 1 − t
+
+1 − s x + t − s
+
+1 − s δs,t (x),
+
+which is (24). For the diagonal identity, 
+
+δt,t (x) = x + (1 − t)b⋆t (x).
+
+Since 
+
+b⋆t (x) = D⋆t (x) − x
+
+1 − t ,
+
+we get 
+
+δt,t (x) = D⋆t (x),
+
+which is (25). It remains to prove the semigroup identity. Let 
+
+z := X⋆s,u (x) = 1 − u
+
+1 − s x + u − s
+
+1 − s δs,u (x).
+
+Using (24), 
+
+X⋆s,t (x) = 1 − t
+
+1 − s x + t − s
+
+1 − s δs,t (x),X⋆u,t (z) = 1 − t
+
+1 − u z + t − u
+
+1 − u δu,t (z).
+
+Since the semigroup property (21) holds, 
+
+X⋆s,t (x) = X⋆u,t (X⋆s,u (x)) = X⋆u,t (z).
+
+Substituting the expression for z = X⋆s,u (x) into the right-hand side gives 
+
+X⋆s,t (x) = 1 − t
+
+1 − u
+
+ 1 − u
+
+1 − s x + u − s
+
+1 − s δs,u (x)
+
+
+
++ t − u
+
+1 − u δu,t (z)= 1 − t
+
+1 − s x + (1 − t)( u − s)(1 − u)(1 − s) δs,u (x) + t − u
+
+1 − u δu,t (z).
+
+19 Preprint. Under review. and canceling the common x-term gives 
+
+t − s
+
+1 − s δs,t (x) = (1 − t)( u − s)(1 − u)(1 − s) δs,u (x) + t − u
+
+1 − u δu,t (z).
+
+Multiplying by (1 − s)/(t − s), we obtain 
+
+δs,t (x) = (1 − t)( u − s)(1 − u)( t − s) δs,u (x) + (1 − s)( t − u)(1 − u)( t − s) δu,t (z).
+
+Define 
+
+γ = (1 − t)( u − s)(1 − u)( t − s) .
+
+Then 
+
+1 − γ = (1 − s)( t − u)(1 − u)( t − s) .
+
+Therefore 
+
+δs,t (x) = γδ s,u (x) + (1 − γ)δu,t 
+
+ X⋆s,u (x).
+
+Conversely, if this identity for δ holds, then applying (24) to both sides gives 
+
+X⋆s,t (x) = X⋆u,t (X⋆s,u (x)) .
+
+Thus the two identities are equivalent. A.8 PROOF OF PROPOSITION 3.8 
+
+Proposition 3.8. Consider the population objective 
+
+L(δ) = Es,u,t, x|δs,t (x) − sg (T (δ)s,u,t (x)) |2 + Et, x|δt,t (x) − D⋆t (x)|2 (27) 
+
+where 
+
+T (δ)s,u,t (x) := γδ s,u (x) + (1 − γ)δu,t 
+
+ X⋆s,u (x). (28) 
+
+Then the true two-time denoiser has zero loss. Conversely, any zero-loss solution satisfies the diagonal (25) and semigroup (26) conditions almost surely under the training distribution. 
+
+Proof. By the two-time denoiser identities (25) and (26), the true two-time denoiser δ satisfies 
+
+δt,t (x) = D⋆t (x)
+
+and 
+
+δs,t (x) = γδ s,u (x) + (1 − γ)δu,t 
+
+ X⋆s,u (x).
+
+Therefore both squared-error terms in L(δ) are zero, and hence 
+
+L(δ) = 0 .
+
+Conversely, suppose L(δ) = 0 . Since L is a sum of nonnegative squared norms, each squared norm must vanish almost surely under its corresponding training distribution. The diagonal term gives 
+
+δt,t (x) = D⋆t (x)
+
+almost surely. The semigroup term gives 
+
+δs,t (x) = T (δ)s,u,t (x)
+
+almost surely. Substituting the definition of T , this becomes 
+
+δs,t (x) = γδ s,u (x) + (1 − γ)δu,t 
+
+ X⋆s,u (x)
+
+almost surely. Thus any zero-loss solution satisfies the diagonal and semigroup consistency identities on the training distributions. 20 Preprint. Under review. 
+
+# B EXPERIMENT DETAILS 
+
+B.1 ANALYSIS DETAILS 
+
+In Section 4.1 (Figure 2), we employ damped Picard iterations (Lauriere, 2021) to approximate the fixed point and update zj with 200 iterations. The damped iteration is formulated as zj+1 =
+
+αzj + (1 − α) ˆDt(xt, zj ), where α is a damping hyperparameter. To find the fixed point at each timestep, we run this process for 200 iterations with α = 0 .3.For the analysis with generation performances (Table 1 and Figure 3), to ensure a fair comparison with the baseline self-conditioning, we utilize a standard Picard iteration ( i.e., α = 0 .0) except for the runs with 100 iterations. For the 100-iteration runs, we retain the damped Picard with α = 0 .3.For the sampling hyperparameters, we set the self-conditioning guidance weight in ELF (Hu et al., 2026) to w = 1 .B.2 SELF -CONDITIONING -FREE MODEL DETAILS 
+
+We realize the fixed-point denoiser D⋆ (13) as a self-conditioning-free model, ELF ⋆, by distilling a frozen self-conditioned ELF teacher ˆD (Hu et al., 2026) with consistency deep equilibrium (CDEQ) distillation (Lin et al., 2026). The distillation compresses the fixed-point iteration (10) into a single forward that predicts its limit z⋆, so the resulting model matches the converged self-conditioned denoiser without iterating at inference. 
+
+Architecture. ELF (Hu et al., 2026) conditions on the flow time t through a bank of four learned prefix tokens, prepended to the latent sequence, to which an embedding of t is added; the self-conditioning guidance weight enters through a second such bank. Following this design, to let the student track progress along the iteration, we condition it on a consistency time τ which represents the progress of fixed-point iteration in the same manner: we append a parallel bank of four phase tokens that carry an embedding of τ . We zero-initialize both the phase token bank and the τ -embedder output, so the phase pathway is initially inert and the warm-started student nearly reproduces the teacher. 
+
+Training. Following Lin et al. (2026), at each step, we run the fixed-point iteration (10) at the training interpolant, zj+1 = ˆDt(x, zj ), from the cold start z0 = 0 for K Anderson-accelerated steps, giving a detached trajectory z0, . . . , zK whose last iterate we treat as the fixed point z⋆. We assign iterate zj a consistency time τj = ε + (1 − e−ρj )( T − ε) with τ0 = ε, and let cskip (τ ) = (τ − ε)/(T − ε) and cout (τ ) = 1 − cskip (τ ). The student predicts a consistency function gj =
+
+cskip (τj ) zj + cout (τj ) Pj , where Pj is a closed-form two-point Anderson combination (mixing 
+
+1.0) of two phase-conditioned student passes. At the cold-start phase τ0, we have cskip = 0 , so gj
+
+collapses to the bare network prediction, which is exactly what inference evaluates. We train gj
+
+with a global term anchoring it to the equilibrium and a local term enforcing consistency with the previous phase, L = λ1|gj − z⋆|2 + (1 − λ1)|gj − sg (gj−1)|2, where the earlier-phase prediction is stop-gradient, and we retain the teacher’s decoder head (Hu et al., 2026). We use K = 20 teacher iterations with Anderson history 3, mixing 0.9, and regularization 10 −4;a schedule with ε = 0 .002 , T = 5 .0, ρ = 0 .3; and loss weight λ1 = 0 .8. Because the consis-tency weighting leaves the cold-start phase weakly supervised, with probability 0.25 we regress the cold-start point τ0 directly onto z⋆. The remaining optimization follows the teacher’s recipe (Appendix B.3). 
+
+Inference. At inference, ELF ⋆ takes a single forward per flow step with a zero self-conditioning slot fixed at the cold-start phase τ0, and carries no self-conditioning across flow steps. Its velocity is therefore autonomous, so generation uses the standard Euler scheme (2). B.3 SELF -CONDITIONING FLOW MAP DETAILS 
+
+Architecture. We parameterize the two-time denoiser δs,t (24) by conditioning the ELF backbone on both the source time s and the target time t. We reuse ELF’s existing bank of flow-time prefix tokens, assigning half to the target t and half to the source s through the shared time-embedder; this 21 Preprint. Under review. introduces no new parameters and reduces to the single-time ELF denoiser on the diagonal s = t,realizing the diagonal condition δs,s = D⋆s (25) by construction. 
+
+Training. Each training step samples times 0 ≤ s ≤ u ≤ t ≤ 1 and splits the batch per example into diagonal ( s = t) and off-diagonal rows. Following (27) , diagonal rows regress δt,t onto the fixed-point denoiser D⋆t . Off-diagonal rows regress δs,t onto the semigroup teacher ¯δs,t , which we build from two stop-gradient passes of the current student, δs,u and δu,t , chained through the midpoint state X⋆s,u (24) by the convex weight γ (26) ; here u is the midpoint of s and t in the percentile parameterization. Following Lee et al. (2026), we draw a diagonal row with probability 
+
+0.5 and pin a fraction 1/32 of the off-diagonal rows to the boundary (s, t ) = (0 , 1) to cover full one-step jumps. The times follow the teacher’s training-time marginal, a logit-normal distribution with (μ, ν ) = ( −1.5, 0.8) . A single student forward at (s, t ) then carries the gradient, and we minimize the per-branch mean-squared error with equal weights. The self-conditioned teacher is steered by a self-conditioning guidance weight w (Hu et al., 2026), which we hold fixed within each training example. We sample a single w per example, from the same log-uniform range [0 .5, 5.0] used in ELF training, and feed that one value to every model call that enters its loss: the teacher passes that form the diagonal target D⋆t , the two student passes that form the off-diagonal semigroup target, and the graded student forward. Sharing one w across both branches and across teacher and student keeps the targets at a common guidance level, so the student learns a single w-conditioned flow map; at inference, w is likewise fixed across all steps and swept to trace the gPPL-entropy frontier. The offline and online routes of Section 3.4 differ only in how the diagonal target D⋆t is supplied. The two-stage FMLM ⋆ (offline) uses the separately distilled ELF ⋆ (Appendix B.2) as the teacher, which already returns D⋆t in a single forward. The one-stage online FMLM ⋆ instead uses the self-conditioned ELF teacher and forms the target on the fly, cold-starting the iteration zj+1 = ˆDt(x, zj )
+
+at z0 = 0, running a fixed number of Picard refinements, and reading out D⋆t with one final self-conditioned pass; the refinement count is the “# FPIs” in Table 3, where more iterations sharpen the target at a higher training cost. For distillation in Section 4.2, we use ELF-B as the teacher model. To ensure tokenizer consistency with the baselines, we train a variant of ELF-B using the GPT-2 tokenizer. Specifically, we replace its original T5 text encoder (Raffel et al., 2020) with the last hidden states of a pretrained GPT-2 Large model (Radford et al., 2019). Aside from this modification, we strictly follow the original ELF architecture and train this variant using the identical hyperparameters. We follow the hyperparameter settings of the original ELF model. Both models are trained for 5 epochs with a global batch size of 512 using 8 NVIDIA B200 GPUs. We employ a combination of Muon optimizers with a peak learning rate of 0.002, incorporating a learning rate warmup over the first 0.5 epochs. Additionally, we apply an exponential moving average (EMA) with a decay rate of 0.9999 and use the EMA checkpoint for inference. 
+
+Inference. To report the gPPL and entropy for the two- and four-step FMLM ⋆ (Tables 2 and 3), we utilize γ-sampling (Lee et al., 2026; Sabour et al., 2026; Kim et al., 2024) with γ = 0 .75 and 1.0,respectively. 
+
+# C QUALITATIVE RESULTS 
+
+We provide generation samples from the FMLM ⋆ model. The one-step, two-step, and four-step samples are shown in Figure 6, Figure 7, and Figure 8, respectively. 22 Preprint. Under review. 
+
+Sampling Steps: 1 gPPL: 92.37, Entropy: 5.27 
+
+are related to increasing the short-term size of the water cover, or the temperature level of which can promote environmental change impacts. These waters and major major agricultural agents may be responsible for temperature increase in the ocean. But the increase of warming from low temperatures are also increasingly increased because of the long-term temperature increase of glaciers. More people living in developing countries such such as South Africa and South America, say their more short-term activities have to have significant impacts on the world environmental systems. According to most-relevant findings, the tropics vegetation crops are the presence of seurane vegetation, the south of the St. Lawrence, the continent’s estuary, according to data reported by Nor se researchers of the Japanese-1990 era and the current the meeting of [1ehorn. And their studies also show that through recent global past activities has caused some 7 million people to water increases through from 20 to 2000 from U.S. 2008, 10 million years, including, and fishing. Sea waters have a major part in the long-term climate gases due to climate disturbances,, in order to counteract this increase on marine water water. A significant increase in moreaching, Orests in the late African Sea through the the Mediterranean Sea, may have impacts on water ecosystems, the presence is a major source of culprits such as marine whales. The outcome could cause much greater water levels [20]. Water in Southern countries and other contributions to water by the rise in the U.S. could also lead to a broader extent of the world environmental system, as in Jojal;’le reported in Sept. [ 2004. Station areas in wetlands could cause an increase by increasing water usage, by by drying up access to aater [23 and environmental degradation by by developing improved water quality from floods, the extent of water’s rocks and also water. To clarify, the specific environmental impacts of Nij’ water over the year will have a significant influence on N&es and H. says, which indicates that as the water impacts of freshwater through surrngs are particularly promising. Yet the broader implications of global energy policies may also have large effects on large-term environmental impacts from climate sources. Note that the possibility of a share of s oil-based fuels will emerging from Earth’s water into the mid-2000 era. Theort studies are also more than five studies. We suggest that the fish diets will increase temperature increase and warmth in the 20 years to come, at the range of results, showing the benefit of lower energy approaches for all people studied, Jo’en says. A fish practice was rated at about 5.5 percent for people who use fish for others, while environmental effects estimates are very poor. It is noteworthy, we included evidence of fitness for the long term studies. Additionally, the researchers found that fish feeding caused increase in temperature in adults, due the increases in water, in addition to a decrease in rainfall in tropical populations, a much higher over the 2010 season. The growth rate observed among Y fish in individuals increased 30 percent in temperature and temperature by increasing through the longest after consuming more than a month among participants, and a greater increase occurred on a longer-term regimen. Other studies also indicated that the UV diet and water are likely to reduce conditions in climate conditions for the O-species. In addition, according to the original studies showed that these warming does will be involved in the increasing value of climate levels. In addition, the long-term study has been turned out to reflect somewhat in pollutants (H’an, G. 13. ”Based on understanding that there are differences in the amount of products being delivered by reulture,”27. Future efforts to mean for heavy water can be improved the health in relative to marine programs (20, 32). Therefore, we may also observe an important use of interventions in water health each year in populations, including the efforts to ensure short-term temperatures. Thusful feeding is encouraged along with temperature gain increases in marine water. Some studies over water diets increase the value of people’ energy by as they cause long term changes, including David Eich (34 and 32). Mediterranean Farmers. Subrain diets should increase by rate of 10 percent over the next five years (see F. 32). Climateforestationing reducing water water levels is a significant threat to the nature of B- and water systems. However, the research also indicate that the increasing loss of consumption of refre fish in nature is also likely sustainable (28, 34). On the other hand, we suggest that fish rewulture use fuels in the (louific climate, together by reducing the abundance of water and water nutrients that they expect an a decrease in water-use rates. Because out of course, fish crops may increase the number of low-income individuals and cardiovascular disease conditions, emphasizing with populous populations in the Americas 
+
+Figure 6: A sample generated by FMLM ⋆ with one-step decoding. 23 Preprint. Under review. 
+
+Sampling Steps: 2 gPPL: 69.28, Entropy: 5.42 
+
+go forward. We have done a lot in working with, but we have all the the best of bringing in customers and we in the right people to prove our goals and show how easy it is to be. The BitcoinFresh team is efficient and also the workhorse of the company. So all this is a company where you can spend anything and countless dollars right out there. Check up with us Jared Upton, Cofounder, At the last time we’ve been surrounded by quite a bunch of people we’ve long been with and loved, and have begun to work on another project. We have thanked all the customers who wanted to share awareness of our existence within... Unfortunately I couldn’t wait to give so much gratitude to the amazing all of people who have felt so incredibly satisfied putting their focus on how to be part of the Bitcoin Company. I most of can’t wait to put the rest of time focusing on seeing two people working on us, and giving out our own product. Jared Upton, We Tell you, it’s been almost four-years to get this up, but we’ve always had to work quickly. We tried to do a huge amount to get for the buildings. Any single look that we want an event comes up early in the back air so we don’t even turn our screen again. I just said you were excited about it. We have over $1000. This is a challenge, but there’s a well trained team. Our long-term goal is to get back onto the floor. So if you want to be inspired, please sign in. (Credit: anbyl / Flickr PhotographyIf you read The League games called Hearthstone, it’s seems that Longland’s partner e-Sport Games is just about to start an its release of The Porsche Racer on Friday 2017. But it actually had a lot of chatter within two weeks as too, with a lot of rumors appearing this week around– and more than hundreds of people have already played it in the world. Now that’s all we’ll decide what it does at the end of the coming year. The Flying GT is a very mysterious title, but got the facts going before the game was released, and the problem is what we’re looking to see. The Street Road car’s air tires are fan-loaded at $70degF, allowing for extreme maneuvers across the course, requiring less than 30 seconds to drive the car. Firsting note, both cool details and details show how the team of this actually helps you. So, we’re working to update it to everyone else. We’ll see more of the full news. Like the upcoming Flying GT website, it will release a full review early today, stay kind for you around the world. It’s also a real enthusiast project, so we can also keep mind some of the important back points before ready to get in with this Porsche car that we play in 2017. Importantly, it’s not surprising that Muzway will have a high–able micro card at home. If you also have a serious road driving experience at 27, then it’s one of the best cards I’ve seen. You can also track these builds on social networks and Twitter, and Twitter, PlayStation Messenger, and Facebook. Due a near-native chipset is included for South Road, it will be an co-ear, much improved controller for both Android and Linux. Elreo 20x is a new social game from Sanway Entertainment and large-mono company that allows dynamic movement changes. When available on the website, these maps path-siveting is persistent arenas for multiplayer matches. As with player gaming. As it did with the previous games, teams include a very large array of co-op features to replicate the individual mechanics of South Formula. San Francisco itself received around 100 points after release – which is isn’t a good thing for high games, as it seems, and it includes a wide variety of features for the Go game. Just slipping right off the edge of your car by causing obstacles, making a car mow without trying to push it down an upwards path, or take an whister towards you to overtake it. O... The fact that you can do things from inside it the Horizon’s map is another instance of engagement, and even on-screen sessions bring creating a much greater sense of investment on player players in a period when tense online battles. As a result, contribution is extremely high indeed, and the high experience per population on each map will lower considerably. As a result of Horizon Racing, we decided in order to develop some individual multiplayer features so that it’s very easy to realize will also be a tougher challenge as the dates build up. This is what we want to see; it 
+
+Figure 7: A sample generated by FMLM ⋆ with two-step decoding. 24 Preprint. Under review. 
+
+Sampling Steps: 4 gPPL: 56.60, Entropy: 5.38 
+
+the same reason, Prostars continue to be enthusiastic. But for building a huge brand, getting us back in business is a little back burner, but we have certainly worked all of the same people together. Prostars and Adidas will continue to make the mark in basketball and motor racing. And unfortunately, their career has been continually disrupted, and that strength could be greatly improved if just it wasn’t the answer. So what we’re asking for is game knowledge. Because NASCAR is a talented team and the wealthy, you just give out the money is ready to work for. What we want to tell you is know that you will be far better. The NASCAR’s Strategy Course takes 30 minutes per week, looking for a way to make your truly know how to get some way up. This ability to go fast will take your mind a lot of excitement over the next year. What is important about this course is you can improve your ability and get you back to the top. This will only take time to take the end of your life. It’s one awesome to see the course so often that you are going to take the time to care to your concerns, to bring your brand alive to the public. For comparison, Pro Sports is fairly awesome. But it’s also a real source of attention, the big video. You are demonstrating it, putting your number on the wall – it’s going to be the difference to your life, making that point, and the results of surviving the financial crisis could have changed the end point of your career... Unfortunately, we also know your mindset is no not who you are. I’ve never been able to be all done due to company updates. Even if you sit down with your team when thinking about reaching the position you are intended to reach,, it can be helpful to talk with someone you think you like. Hopefully he can change his company mindset, think about getting down, and scan his eyes, and try to see how things are. While it’s quite easy to get yourself back off the top of ground, think at the mindset and resources that you have about how to succeed... If you really think about having all the hard efforts to keep it up and your ability to pursue it as well as possible, you would find many people are assuming the same. My peers realize, after all, there are so many so few people who know how to work well in their life. Showbacks Prior to this project, it’s quite different for my own company and it was a difference for me. I want to mention that you have already put a lot of attention along with the efforts you’ve done for NASCAR Marketing, so asked, after deciding. Can you help go even further? I have fought with this goal every since. I’ve been at this good gaming park for years, especially when that finally comes to learn how to keep with the company’s long goals. With focus on public finance, we can continue to pursue the other type of things we need - making ourselves more active, through what we are able to do, and help us get going higher again. There are so many ways of doing better rather than great anymore. To keep things simple, there are plenty of articles to talk about. But in the end, that doesn’t be something you would necessarily want to see, but I suggest you make serious comments.In an effort to discuss the relief and recovery problems, of those men who have been able to have heroin treated this year, has published one of the biggest Day of Fame posts, a website specifically for people in America. One of those she posted was co-churchist Father John S. O-Salgar who works at New York and New Anne, St Pierre and Miel Univ., in TOWN. He talked about his given fortune helping him deal with obesity problems, booze still hit a huge sales high. ”The of my goal to the day is putting the money that help to stay here and work in these issues among the people. A lady who was walking lazy and then came out to help in knowing about several relevant issues and get a job,” Leanger wrote. The post came from David Leber who served for A.A in a Connecticut plane and then worked as an aviation flight demonstrator in the United States, 35-year-old man who was removed from the Connecticut Air Company’s job after being charged with drug possession for a prior three years, felony drug possession and possession, and a Rolled Euler in Florida. Salanger quickly hoped he could get back his money as he also had to sign an introductory fee of $200 a month, showing them he worked on hormone monitoring and protecting his body against inflammation. That year he felt that money was not out of hand. Devin 
+
+Figure 8: A sample generated by FMLM ⋆ with four-step decoding. 25

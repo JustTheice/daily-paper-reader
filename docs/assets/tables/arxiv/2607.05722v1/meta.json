@@ -1,0 +1,96 @@
+{
+  "version": 2,
+  "extractor": "papercropper",
+  "tables": [
+    {
+      "url": "assets/tables/arxiv/2607.05722v1/table-001.webp",
+      "caption": "",
+      "page": 0,
+      "index": 1,
+      "width": 1711,
+      "height": 259,
+      "label": "Table"
+    },
+    {
+      "url": "assets/tables/arxiv/2607.05722v1/table-002.webp",
+      "caption": "",
+      "page": 0,
+      "index": 2,
+      "width": 829,
+      "height": 357,
+      "label": "Table"
+    },
+    {
+      "url": "assets/tables/arxiv/2607.05722v1/table-003.webp",
+      "caption": "",
+      "page": 0,
+      "index": 3,
+      "width": 1715,
+      "height": 308,
+      "label": "Table"
+    },
+    {
+      "url": "assets/tables/arxiv/2607.05722v1/table-004.webp",
+      "caption": "",
+      "page": 0,
+      "index": 4,
+      "width": 828,
+      "height": 617,
+      "label": "Table"
+    },
+    {
+      "url": "assets/tables/arxiv/2607.05722v1/table-005.webp",
+      "caption": "",
+      "page": 0,
+      "index": 5,
+      "width": 1708,
+      "height": 775,
+      "label": "Table"
+    },
+    {
+      "url": "assets/tables/arxiv/2607.05722v1/table-006.webp",
+      "caption": "",
+      "page": 0,
+      "index": 6,
+      "width": 1710,
+      "height": 247,
+      "label": "Table"
+    },
+    {
+      "url": "assets/tables/arxiv/2607.05722v1/table-007.webp",
+      "caption": "",
+      "page": 0,
+      "index": 7,
+      "width": 1711,
+      "height": 331,
+      "label": "Table"
+    },
+    {
+      "url": "assets/tables/arxiv/2607.05722v1/table-008.webp",
+      "caption": "",
+      "page": 0,
+      "index": 8,
+      "width": 1713,
+      "height": 563,
+      "label": "Table"
+    },
+    {
+      "url": "assets/tables/arxiv/2607.05722v1/table-009.webp",
+      "caption": "",
+      "page": 0,
+      "index": 9,
+      "width": 1722,
+      "height": 472,
+      "label": "Table"
+    },
+    {
+      "url": "assets/tables/arxiv/2607.05722v1/table-010.webp",
+      "caption": "",
+      "page": 0,
+      "index": 10,
+      "width": 847,
+      "height": 613,
+      "label": "Table"
+    }
+  ]
+}

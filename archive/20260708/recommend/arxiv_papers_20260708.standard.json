@@ -1,0 +1,156 @@
+{
+  "mode": "standard",
+  "generated_at": "2026-07-08T20:22:29.783452+00:00",
+  "stats": {
+    "mode": "standard",
+    "tag_count": 1,
+    "deep_divecandidates": 1,
+    "deep_cap": 6,
+    "deep_selected": 1,
+    "quick_candidates": 2,
+    "quick_skim_target": 11,
+    "quick_selected": 2
+  },
+  "deep_dive": [
+    {
+      "id": "2607.05722v1",
+      "source": "arxiv",
+      "title": "Nemotron-Labs-Diffusion: A Tri-Mode Language Model Unifying Autoregressive, Diffusion, and Self-Speculation Decoding",
+      "abstract": "We introduce Nemotron-Labs-Diffusion, a tri-mode language model (LM) that unifies AR, diffusion, and self-speculation decoding within a single architecture. Trained with a joint AR-diffusion objective, Nemotron-Labs-Diffusion can switch modes to sustain high throughput across deployment settings and concurrency levels. Our study shows that (1) AR and diffusion objectives are complementary: diffusion improves lookahead planning, while AR provides left-to-right linguistic priors. (2) In self-speculation mode, diffusion drafts while AR verifies, outperforming multi-token prediction (MTP) methods in both acceptance rate and real-device efficiency. (3) A speed-of-light analysis further demonstrates diffusion's long-term potential, with up to 76.5% more tokens per forward pass than self-speculation under an optimal sampler. Scaling to 3B, 8B, and 14B parameters, our Nemotron-Labs-Diffusion family, including base, instruct, and vision-language models, consistently outperforms state-of-the-art open-source AR and diffusion LMs in both accuracy and speed. For example, Nemotron-Labs-Diffusion-8B decodes 6x more tokens per forward than Qwen3-8B with comparable accuracy, translating to 4x higher throughput on SPEED-Bench with SGLang on a GB200 GPU.",
+      "authors": [
+        "Yonggan Fu",
+        "Lexington Whalen",
+        "Abhinav Garg",
+        "Chengyue Wu",
+        "Maksim Khadkevich",
+        "Nicolai Oswald",
+        "Enze Xie",
+        "Daniel Egert",
+        "Sharath Turuvekere Sreenivas",
+        "Shizhe Diao",
+        "Chenhan Yu",
+        "Ye Yu",
+        "Weijia Chen",
+        "Sajad Norouzi",
+        "Jingyu Liu",
+        "Shiyi Lan",
+        "Ligeng Zhu",
+        "Jin Wang",
+        "Jindong Jiang",
+        "Morteza Mardani",
+        "Mehran Maghoumi",
+        "Song Han",
+        "Ante Jukić",
+        "Nima Tajbakhsh",
+        "Jan Kautz",
+        "Pavlo Molchanov"
+      ],
+      "primary_category": "cs.CL",
+      "categories": [
+        "cs.CL"
+      ],
+      "published": "2026-07-07T01:09:54+00:00",
+      "link": "https://arxiv.org/pdf/2607.05722v1",
+      "tags": [
+        "keyword:diffusion-lm",
+        "query:diffusion-lm"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "tri-mode LM unifying AR and diffusion for text generation",
+      "llm_evidence_cn": "统一自回归与扩散的三模式语言模型用于文本生成",
+      "llm_evidence": "统一自回归与扩散的三模式语言模型用于文本生成",
+      "canonical_evidence": "统一自回归与扩散的三模式语言模型用于文本生成",
+      "llm_tldr_en": "Introduces Nemotron-Labs-Diffusion, a tri-mode language model that combines autoregressive, diffusion, and self-speculation decoding, achieving high throughput and complementary benefits between AR and diffusion.",
+      "llm_tldr_cn": "该论文提出Nemotron-Labs-Diffusion，一种融合自回归、扩散和自我推测解码的三模式语言模型。研究表明扩散增强前瞻规划，自回归提供语言先验。在自我推测模式下，扩散草稿由自回归验证，在接受率和设备效率上超越多词预测方法。该模型为文本生成提供了灵活高效的统一框架。",
+      "llm_tldr": "该论文提出Nemotron-Labs-Diffusion，一种融合自回归、扩散和自我推测解码的三模式语言模型。研究表明扩散增强前瞻规划，自回归提供语言先验。在自我推测模式下，扩散草稿由自回归验证，在接受率和设备效率上超越多词预测方法。该模型为文本生成提供了灵活高效的统一框架。",
+      "llm_tags": [
+        "query:diffusion-lm"
+      ],
+      "matched_query_tag": "query:diffusion-lm",
+      "matched_query_text": "diffusion language model text generation",
+      "matched_requirement_id": "req-1",
+      "selection_source": "fresh_fetch"
+    }
+  ],
+  "quick_skim": [
+    {
+      "id": "2606.31323v1",
+      "source": "arxiv",
+      "title": "Accelerated Likelihood Maximization for Diffusion-based Versatile Content Generation",
+      "abstract": "Generating diverse, coherent, and plausible content from partially given inputs remains a fundamental challenge for diffusion models. Existing approaches face clear limitations: training-based approaches offer strong task-specific results but require costly computation, and they generalize poorly across tasks. Training-free approaches offer better efficiency, but they do not explicitly optimize over unobserved variables, leading to globally inconsistent results. To address these limitations, we introduce Accelerated Likelihood Maximization (ALM), a novel training-free sampling strategy integrated into the reverse diffusion process that significantly extends the applicability of diffusion models beyond simple generation tasks. Unlike previous methods that implicitly influence missing regions through pre-generated region constraints, we directly optimize the unobserved region during the sampling process, enabling globally coherent and plausible generation. Furthermore, we incorporate an acceleration strategy that significantly improves computational efficiency without sacrificing performance. Experimental results demonstrate that ALM consistently outperforms state-of-the-art methods in various data domains and tasks, establishing a powerful paradigm for versatile content generation.",
+      "authors": [
+        "Hyunsoo Lee",
+        "Inwoo Hwang",
+        "Young Min Kim"
+      ],
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "published": "2026-06-30T08:27:29+00:00",
+      "link": "https://arxiv.org/pdf/2606.31323v1",
+      "tags": [
+        "keyword:diffusion-lm",
+        "query:diffusion-lm"
+      ],
+      "llm_score": 6.0,
+      "llm_evidence_en": "training-free sampling acceleration for diffusion models, applicable to text diffusion",
+      "llm_evidence_cn": "扩散模型的无训练采样加速，可应用于文本扩散",
+      "llm_evidence": "扩散模型的无训练采样加速，可应用于文本扩散",
+      "canonical_evidence": "扩散模型的无训练采样加速，可应用于文本扩散",
+      "llm_tldr_en": "Proposes Accelerated Likelihood Maximization (ALM), a training-free sampling strategy for diffusion models that extends their applicability beyond simple generation to diverse tasks.",
+      "llm_tldr_cn": "该论文提出加速似然最大化（ALM）方法，一种无训练的扩散模型采样策略。ALM集成到逆向扩散过程中，可处理部分给定输入下的生成任务，无需额外训练。该方法显著扩展了扩散模型的应用范围，包括文本生成、修复等任务。实验表明ALM在保持多样性的同时提高了生成质量。",
+      "llm_tldr": "该论文提出加速似然最大化（ALM）方法，一种无训练的扩散模型采样策略。ALM集成到逆向扩散过程中，可处理部分给定输入下的生成任务，无需额外训练。该方法显著扩展了扩散模型的应用范围，包括文本生成、修复等任务。实验表明ALM在保持多样性的同时提高了生成质量。",
+      "llm_tags": [
+        "query:diffusion-lm"
+      ],
+      "matched_query_tag": "query:diffusion-lm",
+      "matched_query_text": "text diffusion model non autoregressive",
+      "matched_requirement_id": "req-5",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "6"
+    },
+    {
+      "id": "2607.00714v1",
+      "source": "arxiv",
+      "title": "Self-conditioned Flow Map Language Models via Fixed-point Flows",
+      "abstract": "Self-conditioning is a core technique that enhances continuous flow-based language models, where the model learns to denoise generated text by conditioning on its own denoising estimate. While empirically successful, its performance improvements are poorly understood. Moreover, there is growing interest in the use of few-step generators based on flow maps, for which how to leverage self-conditioning is unclear. Here, we show that flow language models with self-conditioning solve a fixed-point iteration that bootstraps the performance of the learned denoiser. We use this viewpoint to formulate fixed-point flows, a two-dimensional class of self-conditioned flows, where the first dimension represents the flow process and the second represents the fixed-point iteration. We show that fixed-point flows define valid flow maps, and show that they can be distilled from self-conditioned flow models by compressing both fixed-point iterations and the flow process, the former with fixed-point distillation and the latter with flow map distillation. Our resulting flow map language model, FMLM$^\\star$, outperforms state-of-the-art self-conditioned models and few-step models in one- and few-step generation on OpenWebText. Code is available at https://github.com/Ugness/self-conditioned-fmlm.",
+      "authors": [
+        "Jaehoon Yoo",
+        "Wonjung Kim",
+        "Floor Eijkelboom",
+        "Chanhyuk Lee",
+        "Nicholas M. Boffi",
+        "Seunghoon Hong",
+        "Jinwoo Kim"
+      ],
+      "primary_category": "cs.CL",
+      "categories": [
+        "cs.CL",
+        "cs.AI"
+      ],
+      "published": "2026-07-01T10:02:20+00:00",
+      "link": "https://arxiv.org/pdf/2607.00714v1",
+      "tags": [
+        "keyword:diffusion-lm",
+        "query:diffusion-lm"
+      ],
+      "llm_score": 6.0,
+      "llm_evidence_en": "self-conditioned flow language model for text generation",
+      "llm_evidence_cn": "自条件流语言模型用于文本生成",
+      "llm_evidence": "自条件流语言模型用于文本生成",
+      "canonical_evidence": "自条件流语言模型用于文本生成",
+      "llm_tldr_en": "Proposes fixed-point flows, a self-conditioned flow language model that bootstraps denoiser performance, enabling few-step text generation via iterative fixed-point solving.",
+      "llm_tldr_cn": "提出固定点流（Fixed-point Flows）方法，将自条件流语言模型重新解释为固定点迭代，通过二维流过程增强去噪器性能。该方法实现了少步文本生成，实验表明在语言建模任务上性能优于传统连续流模型，为扩散语言模型提供了新的理论视角和高效生成途径。",
+      "llm_tldr": "提出固定点流（Fixed-point Flows）方法，将自条件流语言模型重新解释为固定点迭代，通过二维流过程增强去噪器性能。该方法实现了少步文本生成，实验表明在语言建模任务上性能优于传统连续流模型，为扩散语言模型提供了新的理论视角和高效生成途径。",
+      "llm_tags": [
+        "query:diffusion-lm"
+      ],
+      "matched_query_tag": "query:diffusion-lm",
+      "matched_query_text": "text diffusion model non autoregressive",
+      "matched_requirement_id": "req-5",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "6"
+    }
+  ]
+}
