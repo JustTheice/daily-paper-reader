@@ -25,3 +25,57 @@ subscriptions:
     stage: A
     diff_threshold_pct: 15
   keyword_recall_mode: or
+  intent_profiles:
+    - tag: diffusion-lm
+      description: 监控DLLM、diffusion language model、LLaDA、masked/discrete diffusion language model 等方向的论文。
+      enabled: true
+      paper_sources:
+        - arxiv
+      keywords:
+        - keyword: diffusion language model
+          keyword_cn: 扩散语言模型
+          query: diffusion language model text generation
+        - keyword: masked diffusion language model
+          keyword_cn: 掩码扩散语言模型
+          query: masked diffusion language model discrete
+        - keyword: discrete diffusion language model
+          keyword_cn: 离散扩散语言模型
+          query: discrete diffusion language model
+        - keyword: LLaDA diffusion model
+          keyword_cn: LLaDA扩散模型
+          query: LLaDA large language diffusion model
+        - keyword: text diffusion model
+          keyword_cn: 文本扩散模型
+          query: text diffusion model non autoregressive
+      intent_queries:
+        - query: diffusion language model survey
+          query_cn: 扩散语言模型综述
+          enabled: true
+          source: manual
+          note: ''
+        - query: masked discrete diffusion for language generation
+          query_cn: 面向语言生成的掩码离散扩散
+          enabled: true
+          source: manual
+          note: ''
+        - query: LLaDA model variants and improvements
+          query_cn: LLaDA模型变体与改进
+          enabled: true
+          source: manual
+          note: ''
+      updated_at: '2026-07-08T03:13:14.159Z'
+source_backends:
+  arxiv:
+    papers_table: arxiv_papers
+    use_vector_rpc: true
+    vector_rpc: match_arxiv_papers
+    vector_rpc_exact: match_arxiv_papers_exact
+    use_bm25_rpc: true
+    bm25_rpc: match_arxiv_papers_bm25
+    sync_table: arxiv_sync_status
+    sync_success_value: success
+    schema: public
+    kind: supabase
+    enabled: true
+    url: https://lyucdwgefyfbmaiopjbk.supabase.co
+    anon_key: sb_publishable_lX-oi64Uxyd7SIVv3_w2Uw_MTOojeKq
