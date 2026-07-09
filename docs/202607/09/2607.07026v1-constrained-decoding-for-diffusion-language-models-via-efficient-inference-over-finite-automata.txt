@@ -1,0 +1,857 @@
+Title: Constrained Decoding for Diffusion Language Models via Efficient Inference over Finite Automata
+
+URL Source: https://arxiv.org/pdf/2607.07026v1
+
+Published Time: Thu, 09 Jul 2026 00:29:41 GMT
+
+Number of Pages: 19
+
+Markdown Content:
+# Constrained Decoding for Diffusion Language Models via Efficient Inference over Finite Automata 
+
+Meihua Dang 
+
+Stanford University 
+
+mhdang@cs.stanford.edu 
+
+Stefano Ermon 
+
+Stanford University 
+
+ermon@cs.stanford.edu 
+
+## Abstract 
+
+Constrained decoding is essential for serving LLMs, ensuring that generated outputs follow specific structures such as JSON schema-formatted function calls. Existing systems are designed for autoregressive models and assume left-to-right generation, masking out invalid next tokens at each step. Diffusion language models, however, break this assumption: they sample multiple positions simultaneously from a fully-factorized mean-field distribution at each denoising step. In this paper, we present an exact and tractable algorithm for sampling from the constrained mean-field posterior under any constraint expressible as a finite automaton. Viewing finite automata as graphical models, we obtain tractable representations of the constrained distribution that enable efficient inference. The approach guarantees constraint satisfaction by construction, supports both greedy and sampling-based decoding, and is compatible with parallel and block-wise decoding under arbitrary remasking schedules. Applying depth-reduction techniques from arithmetic circuit theory, we further reduce sampling depth from linear to logarithmic in the sequence length. Empirical evaluations on Dream-7B and LLaDA-8B show substantial accuracy gains across various tasks including function calling (xLAM, BFCL), planning (Sudoku, Countdown), text-to-SQL (Spider), and math reasoning (GSM-Symbolic), with little inference overhead relative to unconstrained decoding. For example, on BFCL-Live, our approach improves Dream-7B’s greedy decoding accuracy from 63.9% to 71.5%, and stochastic sampling accuracy from 22.3% to 69.0%, where the unconstrained baseline collapses, with under 5% wall-clock overhead. 
+
+## 1 Introduction 
+
+A wide range of LLM applications require outputs to strictly adhere to structural constraints. Examples include generating function calls conforming to a given JSON schema [ 16 , 17 ] and producing syntactically correct SQL queries [ 8]. Autoregressive LLMs enforce such constraints at inference time via constrained decoding , where invalid next tokens violating the constraint are masked out at each generation step [ 32 ]. This approach is now a standard component of LLM inference frameworks such as XGrammar [3], Guidance [5] and SGLang [38]. Recent advances in discrete diffusion language models (dLLMs) have established them as competitive alternatives to autoregressive LLMs [ 1, 10 , 22 ]. Open-weight models such as LLaDA-8B [ 13 ] and Dream-7B [ 34 ] have demonstrated performance comparable to similarly sized autoregressive models on code and math reasoning. Closed-source models including Mercury [ 7 ], Gemini Diffusion [ 4], and Seed Diffusion [27] further demonstrate excellent inference efficiency. Existing constrained generation frameworks [ 3, 5, 38 ] are specifically designed for left-to-right au-toregressive generation and adapting them to dLLMs poses unique challenges. Unlike autoregressive LLMs, dLLMs sample multiple tokens simultaneously from a fully-factorized mean-field distribution at each step. Because constraints operate globally, masking tokens independently at each position is not enough: locally valid tokens can still combine into invalid sequences. 
+
+> Preprint. arXiv:2607.07026v1 [cs.LG] 8 Jul 2026
+
+To bridge this gap, we introduce an exact and tractable inference algorithm that, at each diffusion step, samples from the constrained mean-field posterior : pθ (x0 | xt, C) ∝ pθ (x0 | xt) · 1[x0 ∈ C ]
+
+where the constraint C is expressed as a finite automaton, pθ (x0 | xt) is the model’s fully factorized mean-field prediction, and the indicator enforces the constraint globally on the complete sequence x0.Viewing the automaton as a graphical model encoding constraint C as its support, we are able to obtain a tractable representation for the constrained mean-field prediction pθ (x0 | xt, C), which enables efficient sampling. Our approach guarantees constraint satisfaction by construction, supports both greedy decoding and stochastic sampling, and applies to parallel and block-wise decoding under arbitrary remasking schedules. It also computes per-token marginals under the constrained distribution, which we use as a confidence signal for remasking. Naive sampling from the chain-structured graphical model induced by a finite automaton requires 
+
+O(L) sequential forward/backward steps for a sequence of length L. Inspired by depth-reduction techniques for arithmetic circuits [ 30 ], we restructure this linear computation graph into a binary tree of prefix–suffix state pairs, reducing inference steps from O(L) to O(log L) while preserving the same sampling distribution. This yields substantially more parallelism on modern GPUs. Empirically, we evaluate our method on LLaDA-8B and Dream-7B comparing against the uncon-strained base models. We consider diverse constraints and tasks, including JSON-schema constraints for function calling (xLAM, BFCL), format constraints for planning (Sudoku, Countdown), SQL syntax and schema constraints (Spider), and symbolic expression constraints for math reasoning (GSM-Symbolic). Our method guarantees constraint satisfaction and substantially improves accuracy. For example, on BFCL-Live, our approach improves Dream’s greedy decoding accuracy from 63.9% to 71.5%, and remains robust under stochastic sampling: while the unconstrained Dream collapses to 22.3%, our method achieves 69.0%, with under 5% wall-clock overhead. 
+
+## 2 Related Work 
+
+Constrained decoding for autoregressive LLMs. There is an extensive line of work on locally constrained decoding [ 26 , 23 , 20 , 29 , 15 ], with a primary focus on enforcing hard constraints efficiently during autoregressive generation. These approaches typically operate by masking out invalid next tokens based on the current prefix, thereby ensuring local constraint satisfaction at each decoding step. Existing frameworks leverage different constraint representations and develop different parsing algorithms correspondingly: for example, Outlines [ 32 ] uses regular expressions and their corresponding finite automata representations, while more recent systems such as XGrammar [ 3]and Guidance [5] rely on context-free grammars. 
+
+Constrained decoding for dLLMs. DINGO [ 28 ] is one pioneering work exploring inference algorithms over finite automata to support constrained decoding for dLLMs. In particular, DINGO leverages a dynamic programming algorithm to perform MAP inference on deterministic finite automata with their inputs weighted by the mean-field predictions from dLLMs, supporting block-wise greedy decoding from dLLMs. Our approach can be viewed as a strict generalization of DINGO, supporting greedy decoding and sampling under arbitrary masking strategies constrained by (possibly nondeterministic) finite automata (Section 4). Mündler et al. [12] and Zhang et al. [37] target richer constraints expressed as context-free grammars (CFGs). Both adopt a per-step rejection-sampling scheme that draws candidate tokens and then verifies whether the intermediate output remains acceptable; Zhang et al. [37] additionally introduce a lookahead step that uses the mean-field distributions to reliably verify proposed tokens. These methods do not guarantee constraint satisfaction within a finite sampling budget , as acceptance rate can be extremely low in practice. 
+
+## 3 Background 
+
+3.1 Diffusion Language Models 
+
+Masked dLLMs [ 1 , 22 , 25 ] learn to reverse a forward corruption process q that stochastically converts a clean token sequence x0 = ( x01, . . . , x 0
+
+> L
+
+) of length L into a noisy sequence xt over time t ∈ [0 , 1] ,2s0 s1 s2                  
+
+> a(e0)
+> b, c (e1)
+> d(e2)
+> e(e3)
+> (a) DFA M
+> z1z2· · · zLzL+1
+> x1x2xL
+> (b) Graphical Model
+> e0e1e2e3
+> e0
+> e1
+> e2
+> e3
+> (c) Transition
+> abcde
+> e0
+> e1
+> e2
+> e3
+> (d) Emission
+
+Figure 1: (a) A finite automaton M accepting a(b|c)∗de ∗. (b) The induced chain-structured graphical model over length-L sequences, with edge-valued latents z1: L emitting observed tokens x1: L. (c) The transition factor p(zt | zt−1), nonzero when consecutive edges chain end-to-end ( dst( zt−1) = src( zt)). 
+
+(d) The emission factor p(xt | zt), nonzero when xt is in the label set of edge zt.by masking each token with probability t:
+
+qt|0(xti | x0 
+
+> i
+
+) = 
+
+t, xti = [MASK] 
+
+1 − t, xti = x0
+
+> i
+
+qt|0(xt | x0) = Y
+
+> i
+
+qt|0(xti | x0 
+
+> i
+
+). (1) dLLMs parameterize the reverse process via a mean-field distribution pθ (x0 | xt) over clean tokens given noisy input, trained by maximizing an evidence lower bound on the data log-likelihood [ 22 , 14 ]. Sampling from dLLMs begins with a fully masked sequence and proceeds by iteratively unmasking tokens. A denoising step from time t to s < t first draws a full clean sequence ˆx0 from the mean-field prediction pθ (x0 | xt), then commits a subset U ⊆ { i : xti = [MASK] } of newly predicted positions and re-masks the rest to obtain xs:
+
+ˆx0 ∼ pθ (x0 | xt) = 
+
+> L
+
+Y
+
+> i=1
+
+pθ (x0 
+
+> i
+
+| xt), xsi =
+
+ˆx0 
+
+> i
+
+i ∈ U 
+
+xti otherwise. (2) Iterating this denoising process from xT down to x0 defines a marginal distribution pdLLM (x0) over clean sequences, which we refer to as the dLLM’s generative distribution . While dLLMs are trained on uniformly random masks, in practice decoding heuristics are used at inference time to choose which positions to unmask. For example, Dream selects positions with the lowest predictive entropy at each step [34], while LLaDA selects positions with the highest predictive probability [13]. 
+
+3.2 Finite Automata 
+
+In this work, we consider constraints expressible as finite automata [6]. 
+
+Definition 3.1. A (nondeterministic) finite automaton (FA) is a tuple M = ( S, V, δ, s 0, F) with states S, alphabet V (often corresponding to a dLLM vocabulary), transition function δ : S × V → 2S ,initial state s0, and accept states F ⊆ S . A string v1: L is accepted if there exists a sequence of states 
+
+s0, s 1, . . . , s L with si ∈ δ(si−1, v i) and sL ∈ F . A finite automaton is deterministic if |δ(s, v )| = 1 
+
+for all s and v.A finite automaton encodes a constraint C ⊆ V L as the set of length-L accepted strings. Equivalently, as illustrated in Figure 1, we can also view M as a directed graph with edge set 
+
+E := {(s, s ′) ∈ S × S | ∃ v s.t. s′ ∈ δ(s, v )}.
+
+For each edge e = ( s, s ′), we write src( e) := s, dst( e) := s′ and label( e) := {v | s′ ∈ δ(s, v )}.Under this view, a string v1: L is accepted iff there exists a path e1: L such that src( e1) = s0, dst( ei) = src( ei+1 ) for all i < L , dst( eL) ∈ F , and vi ∈ label( ei) for all i.
+
+Finite automata as graphical models. Following Dang et al. [2] , we define pM as a chain-structured graphical model over sequences of L tokens pM(x1: L) such that pM(x1: L) > 0 if and only if x1: L ∈ C , that is, the constraint C is encoded as its support. pM can also be viewed as a hidden Markov model [ 21 ], with latent variables zi ∈ E taking values from the edge set of the automaton. See Figure 1 for a visualization. The latent sequence z1: L encodes a random path through the automaton: zt is the edge taken at step i with token xi emitted from its label label( e). Consecutive edges must chain end-to-end, i.e. 3dst( zi) = src( zi+1 ), as required by the transition matrix, starting at the initial state s0 and ending in an accepting state in F. Abusing notation, we write conditional probabilities as 1
+
+
+
+pM(z1 = e) := 1[src( e) = s0],pM(zi = e′ | zi−1 = e) := 1[dst( e) = src( e′)] ,pM(xi = v | zi = e) := 1[v ∈ label( e)] .
+
+Marginalizing over the latent paths yields 
+
+pM(x1: L) ∝ X
+
+> z1: L
+
+pM(z1)
+
+> L
+
+Y
+
+> i=2
+
+pM(zi | zi−1)
+
+> L
+
+Y
+
+> i=1
+
+pM(xi | zi) 1[dst( zL) ∈ F ]. (3) The value of pM(x1: L) is proportional to the number of accepting paths that generate x1: L; if the finite automaton is deterministic , then each accepted sequence has exactly one accepting path, thus 
+
+pM becomes uniform over C. The chain structure allows pM and its marginals to be computed exactly via forward–backward message passing [18]. 
+
+## 4 Method 
+
+4.1 Problem Statement 
+
+Our goal is to sample from a dLLM’s generative distribution pdLLM restricted to a constraint C,i.e., pdLLM (x0 | x0 ∈ C ). However, sampling exactly from this distribution is intractable, and one naive resort is rejection sampling against the full reverse process, which is infeasible in practice due to extremely low acceptance rates. For autoregressive LLMs, a common practice is to mask out next tokens that would violate the constraint as generation proceeds left-to-right [ 32 ]. Following an analogous strategy, we enforce that samples drawn from each diffusion step must satisfy the constraint. Recall from Equation (2) that a standard diffusion step samples ˆx0 from the model’s mean-field distribution. We instead sample from this distribution restricted to C, ensuring ˆx0 ∈ C at every step, so the final output is guaranteed to satisfy the constraint by construction. Concretely, at each denoising step we draw 
+
+ˆx0 ∼ pθ (x0 | xt, C) ∝
+
+> L
+
+Y
+
+> i=1
+
+pθ (x0 
+
+> i
+
+| xt)
+
+!
+
+· 1[x0 ∈ C ]. (4) 
+
+Why this is challenging. At each diffusion step, the mean-field prediction Q 
+
+> i
+
+pθ (x0 
+
+> i
+
+| xt) is fully factorized, i.e. each position is sampled independently, while the constraint C couples positions globally. For example, if C only accepts valid real numbers, both “ 1. ” and “ .1 ” are valid length-2 sequences, but a factorized sampler that draws “ .” at position 1 (consistent with “ .1 ”) and “ .” at position 2 (consistent with “ 1. ”) produces the invalid sequence “ .. ”. Therefore, the autoregressive remedy of filtering out invalid next tokens does not apply: the validity of position i depends on the tokens being sampled simultaneously at all other positions. Sampling exactly from Equation (4) therefore requires reasoning about the joint distribution induced by the constraint. 
+
+4.2 Tractable Inference over Finite Automata Constraints 
+
+Inference over general constraints is intractable, and for this work, we focus on constraints expressible by finite automata. As reviewed in Section 3.2, an automaton induces a chain-structured graphical model (Figure 1) and hence a distribution pM(x01: L) over length-L sequences whose support is exactly the constrained language, i.e., pM(x01: L) > 0 if and only if x01: L ∈ C .As described in Section 3.2, if the finite automaton is deterministic then pM is uniform over C.Sampling from the constrained posterior in Equation (4) therefore reduces to sampling from the product of mean-field and constrained distribution: 
+
+ˆx0 ∼
+
+> L
+
+Y
+
+> i=1
+
+pθ (x0 
+
+> i
+
+| xt)
+
+!
+
+· pM(x01: L) ∝ Equation (4) (5)  
+
+> 1These are unnormalized factors rather than conditional probabilities; we treat them as such and implicitly normalize globally over length-Lsequences during sampling.
+
+4· · · zℓ · · · zr−1 zr · · · 
+
+xℓ xr−1
+
+> (a) Conditional independence.
+
+z1 z2 · · · z8 z9
+
+x1 x2 x8 
+
+> (b) Chain-structured ( L= 8 ).
+
+z1:9 
+
+z1:5 z5:9 
+
+z1:3 z3:5 z5:7 z7:9 
+
+z1:2 z2:3 z3:4 z4:5 z5:6 z6:7 z7:8 z8:9 
+
+x1 x2 x3 x4 x5 x6 x7 x8 
+
+> (c) Tree-structured ( L= 8 )
+
+Figure 2: Chain-structured graphical model and its tree-structured equivalent. (a) Given boundary states zℓ and zr , xℓ:r−1 is independent of the rest, the property exploited by the tree decomposition. 
+
+(b) Naive sequential chain. (c) Tree-structured equivalent enabling O(log L) parallel sampling. which is exactly the desired constrained mean-field distribution. For non-deterministic finite au-tomata (NFAs), the product construction above remains tractable, but pM(x01: L) now weights each accepted sequence by the number of accepting paths that generate it; sampling from this weighted distribution becomes a soft proxy for pθ (x0 | xt, C).
+
+Tractable product construction. Given two distributions pθ and pM, our goal is to sample from 
+
+g(x01: L) ∝ pθ (x01: L) · pM(x01: L). The product of two arbitrary distributions is in general intractable. In our setting, however, pθ is fully factorized (mean-field) and pM is chain-structured, thus their product admits a tractable representation with the same chain structure as pM in Figure 1 [24, 31]. Concretely, the product is obtained by reweighting each individual emission factor of pM with the corresponding mean-field term of pθ (x0 | xt) = QLi=1 pθ (x0 
+
+> i
+
+| xt), while leaving the transition factors unchanged. This yields a new chain-structured model (Figure 1(b)) with factors 
+
+
+
+g(z1 = e) := pM(z1 = e),g(zi = e′ | zi−1 = e) := pM(zi = e′ | zi−1 = e),g(xi = v | zi = e) := pM(xi = v | zi = e) · pθ (xi = v | xt)
+
+Note that these reweighted factors are unnormalized and hence do not define conditional probabilities on their own; locally normalizing each factor would yield a distribution that is different from g(x01: L).Instead, we normalize g globally over length-L sequences to preserve the original distribution. As in standard chain-structured graphical models [ 21 ], to sample from g, we first perform a backward pass to compute the required normalization constants for each factor [ 18 ] and then draw samples via ancestral sampling. 
+
+Time complexity. The backward message-passing costs O(L(|E| 2 + |E||V| )) FLOPs: the O(L|E| 2)
+
+term comes from the message propagation from zt to zt−1 and the O(L|E||V| ) term arises from emission reweighting using LM probabilities. The forward pass adds O(L(|E| + |V| )) FLOPs of work, sampling zi and xi for 1 ≤ i ≤ L. In practice, we use the state-space formulation, reducing the total number of FLOPs to O(L(|S| 2 + |E||V| )) by performing message passing over the states of the finite automaton instead of the edges. Details in Appendix A. 
+
+Remasking confidence and diffusion sampling. dLLMs select which tokens to commit at each step using a per-position confidence score, typically the unconstrained marginal pθ (x0 
+
+> i
+
+| xt). Under a constraint C, the appropriate score is the constrained marginal pθ (x0 
+
+> i
+
+= ˆ xi | xt, C), which reflects how strongly the constraint and the model jointly prefer ˆxi at position i.In diffusion models, this sampling procedure must be repeated at every denoising step; as a result, the 
+
+O(L) sequential depth compounds across steps and becomes a major bottleneck. To address this, we introduce a log-depth sampling algorithm that reduces the sequential dependence to O(log L).5Algorithm 1 Parallel constrained sampling from pθ (x0 | xt, C)
+
+Require: Diffusion predictions pθ (x0 | xt), constraint C, length L
+
+Ensure: Sample x0 ∼ pθ (x0 | xt, C) 
+
+> 1:
+
+for k = 0 , 1, . . . , log 2 L do ▷ compute messages bottom-up  
+
+> 2:
+
+Compute 2k-step transitions {p(zi+2 k | zi)}i from 2k−1-step transitions  
+
+> 3:
+
+end for  
+
+> 4:
+
+Sample boundary states (z1, z L+1 ) from their joint marginal ▷ sample top-down  
+
+> 5:
+
+return SAMPLE (1 , L + 1 , z 1, z L+1 ) 
+
+> 6:
+
+procedure SAMPLE (ℓ, r, z ℓ, z r ) 
+
+> 7:
+
+if r − ℓ ≤ 1 then  
+
+> 8:
+
+return sample xℓ ∼ p(xℓ | zℓ, z r ) ▷ base case  
+
+> 9:
+
+end if  
+
+> 10:
+
+m ← ⌊ (ℓ + r)/2⌋ 
+
+> 11:
+
+Sample zm ∼ p(zm | zℓ, z r ) ∝ p(zm | zℓ) · p(zr | zm) 
+
+> 12:
+
+in parallel:  
+
+> 13:
+
+xℓ:m−1 ← SAMPLE (ℓ, m, z ℓ, z m) 
+
+> 14:
+
+xm:r−1 ← SAMPLE (m, r, z m, z r ) 
+
+> 15:
+
+return concat (xℓ:m−1, x m:r−1) 
+
+> 16:
+
+end procedure 4.3 Efficient Log-depth Tree Sampling 
+
+Standard ancestral sampling, as well as forward/backward message passing, is sequential for the chain-structured graphical model in Figure 2b: each zi depends on zi−1, so we must proceed through all L states iteratively, even though the computation at each step is small (on the order of 10 6 FLOPs). To expose more parallelism and fully leverage modern GPUs, we apply depth-reduction techniques for arithmetic circuits [30, 36], reducing the number of sequential steps from O(L) to O(log L).The key observation is that, for any states l < m < r , conditioning on the two boundary states zℓ and 
+
+zr makes the tokens xℓ:m−1 and xm:r−1 conditionally independent given the midpoint state zm [ 19 ]: 
+
+p(xℓ:r−1 | zℓ, z r ) ∝ X
+
+> zm
+
+p(zm | zℓ, z r )
+
+| {z }
+
+> midpoint
+
+· p(xℓ:m−1 | zℓ, z m)
+
+| {z }
+
+> left half
+
+· p(xm:r−1 | zm, z r )
+
+| {z }
+
+> right half
+
+, ℓ < m < r (6) where we typically take m = ( ℓ + r)/2. For example, in Figure 2c, conditioning on z1 and z9
+
+makes x1:4 and x5:8 conditionally independent given z5. This enables a divide-and-conquer sampling algorithm. Instead of sampling the latent states sequentially as z1, x 1, z 2, x 2, . . . , z L, x L, we first sample the midpoint latent state z⌊L/ 2⌋+1 given the boundary states. The left and right subproblems are then conditionally independent and can therefore be sampled in parallel. Recursively applying this procedure yields a sampler of depth log L, with all subproblems at each recursion level processed in parallel (Figure 2c). The base case samples all tokens in parallel from the emission factors 
+
+p(xi | zi, z i+1 ) ∝ p(xi | zi) · p(zi+1 | zi). The conditional coefficients p(zm | zℓ, z r ) in Equation (6) are not given by the model directly, but can be computed by recursion as well from the relation: 
+
+p(zm | zℓ, z r ) ∝ p(zm | zℓ) · p(zr | zm), (7) where the right-hand side are multi-step transition probabilities, and all of which can be computed in log L steps. The full algorithm consists of two phases: a bottom-up pass that precomputes the multi-step transitions, and a top-down divide-and-conquer pass that samples midpoint states level by level. Once all hidden states z1: L are sampled, the tokens x1: L are sampled independently in parallel from p(xi | zi, z i+1 ). Pseudocode is given in Algorithm 1; the proof is in Appendix B. 
+
+Time complexity. The bottom-up parallel pass computes all multi-step transitions via Equation (7), costing O(L(|E| 3 + |E||V| )) FLOPs in O(log L) depth: the O(L|E| 3) term comes from |E| × |E| 
+
+matrix multiplications, while the O(L|E||V| ) emission reweighting term is the same as in ancestral sampling. The top-down sampling pass samples the hidden states z1: L+1 in O(L|E| ) work and 
+
+O(log L) depth via the recursion tree, after which all tokens x1: L are sampled fully in parallel at O(L|V| ) work. Similar to ancestral sampling, the total number of FLOPs can be reduced to 
+
+O(L(|S| 3 + |E||V| )) in O(log L) depth when performing message passing over states. 64 16 64 256 
+
+> Sequence Length
+> 0
+> 50
+> 100
+> 150
+> 200
+> ms
+> Wall Time / Sample
+> Chain
+> Tree
+
+Figure 3: Runtime comparison for chain (ancestral) and tree (log-depth) sampling on a DFA. 
+
+Parallelization vs. FLOPs tradeoff. Compared to ancestral sampling, log-depth sampling increases the message-passing FLOPs by a factor of |S| , but reduces the depth of the com-putation graph from O(L) to O(log L). This tradeoff is favorable on modern GPUs: the additional FLOPs are spent on larger matrix operations, while the number of sequential GPU calls is reduced from O(L) to O(log L). Since each step of ancestral sampling performs relatively little work, its runtime is often dominated by synchronization and kernel-launch overhead, while the log-depth sampler exposes substantially more parallelism at each layer, leading to higher GPU utilization and lower wall-clock latency. 
+
+## 5 Experiments 
+
+5.1 Tasks, Models and Setups Tasks We evaluate our method on five tasks across six datasets. Constraints are encoded as finite automata (DFA or NFA); full prompts and example outputs are provided in Appendix C. • Function Calling (xLAM, BFCL). Task: Given a user query and a set of available function schemas, generate the corresponding function call. Data: xlam-function-calling-60k (xLAM) [ 9 ]and the single-turn split of the Berkeley Function Calling Leaderboard (BFCL) [ 17 ], including both non-live and live settings. Metric: Exact match against the ground-truth function call. Constraint: 
+
+A DFA enforcing that the output conforms to the given function schema. We evaluate two output formats: Python format (the BFCL standard, e.g., get_weather(location="NYC") ) and JSON format (e.g., {"name": "get_weather", "location": "NYC"} ). • Sudoku. Task: Solve a 4 ×4 Sudoku puzzle [ 33 ]. Metric: Exact match against valid Sudoku solutions. Averaged across number of prefilled cells {4, . . . , 12 }. Constraint: A DFA enforcing the 4 ×4 output format and preserving prefilled input cells; row, column, and box constraints are not enforced by the DFA, which would require an exponentially larger DFA. • Countdown. Task: Reach a target number using arithmetic operations on three given numbers [ 33 ]. 
+
+Metric: Whether the expression evaluates to the target. Constraint: A DFA enforcing A op B = C
+
+at each step, with operands from the input or prior results and the final result equal to the target. • Math reasoning (GSM-Symbolic). Task: Solve grade-school math word problems. Data: GSM-Symbolic [ 11 ], where numerical values and names are replaced by symbolic variables. Metric: 
+
+Exact match on the final answer. Constraint: A DFA enforcing that symbolic expressions appear only within « and », while the remaining text is unrestricted natural language. • Text-to-SQL (Spider). Task: Given a user query and a database schema, generate the corresponding SQL query. Data: Spider [ 35 ]. Metric: Execution accuracy. A query is correct if it returns the same results as the ground truth on the test database. Constraint: An NFA encodes SQL grammar restricted to the columns and tables in the provided schema. 
+
+Models We evaluate two open-weight dLLMs, LLaDA-8B [ 13 ] and Dream-7B [ 34 ], each with 
+
+Base and Instruct variants. We use the Base variants for Sudoku and Countdown and the Instruct 
+
+variants for the remaining tasks [ 34 ]. For position selection, LLaDA selects the highest-probability positions, while Dream selects the lowest entropy ones. Our method computes marginal probabilities under the constrained distribution at each step and uses them as the confidence signal for both models. 
+
+5.2 Main Results 
+
+Table 1 reports baseline and constrained accuracy across five tasks under two decoding regimes: greedy decoding (temperature 0) and stochastic sampling (temperature 1), along with the baseline’s constraint satisfaction rate. Our method guarantees 100% constraint satisfaction by construction. 
+
+Stochastic sampling collapses unconstrained dLLMs; constrained decoding recovers near-greedy accuracy. Without constraints, switching from greedy ( T =0 ) to stochastic decoding ( T =1 )destroys structured-output performance: Dream’s BFCL-Live (JSON) accuracy drops from 63.9% to 22.3%. The collapse is largely driven by constraint satisfaction: under sampling, far more outputs 7Table 1: Comparing unconstrained (Base) and constrained (Ours) accuracy (%) under greedy decoding and stochastic sampling on Dream-7B and LLaDA-8B. CS is the baseline constraint satisfaction rate; our method guarantees 100% constraint satisfaction by construction. For function calling, we report both JSON and Python formats; for BFCL, L/NL denote Live and Non-Live settings.                                                                                                                                               
+
+> Dream-7B LLaDA-8B Greedy Sampling Greedy Sampling Task / Method CS Base Ours CS Base Ours CS Base Ours CS Base Ours
+> Function Calling
+> xLAM (JSON) 90.1 74.6 76.6 59.2 50.5 75.7 90.2 67.8 69.0 86.4 64.2 68.4
+> BFCL L (JSON) 86.7 63.9 71.5 31.2 22.3 69.0 89.5 59.6 65.6 84.7 56.6 63.3
+> BFCL NL (JSON) 90.3 79.9 82.4 47.1 40.8 82.6 93.5 81.7 85.5 92.9 80.5 82.8
+> xLAM (Python) 70.3 56.1 76.4 25.6 20.9 76.8 77.3 60.1 71.4 69.4 54.2 70.8
+> BFCL L (Python) 36.0 22.4 69.7 4.4 2.8 67.8 74.5 50.3 64.0 68.3 46.8 63.0
+> BFCL NL (Python) 44.4 36.3 78.3 8.4 7.2 76.2 83.8 71.4 83.8 76.1 62.3 81.4
+> Planning
+> Sudoku 38.0 36.4 92.4 7.6 4.7 91.9 20.7 19.8 79.6 19.8 18.7 77.9
+> Countdown 53.6 53.6 100. 35.2 35.2 100. 53.8 53.8 100. 53.5 53.5 100.
+> Code & Math
+> Spider 72.2 52.7 53.0 19.3 15.5 52.1 73.5 53.2 53.6 69.1 49.8 53.3
+> GSM-Symbolic 80.2 39.9 40.2 54.6 15.0 38.0 81.5 49.6 49.2 80.1 46.9 49.2
+
+fail to satisfy. Our method improves greedy accuracy across tasks and, more interestingly, preserves accuracy under stochastic sampling where the unconstrained baseline collapses (69.0%, vs. 22.3% baseline), largely closing the gap to greedy performance. 
+
+The format gap is structural, not semantic. Switching from JSON to Python format sharply degrades baseline performance (Dream BFCL-Live: 63.9% to 22.4%; LLaDA: 59.6% to 50.3%), suggesting that these models know what function to call but struggle with how to format it. Our method largely closes this gap (Dream: 71.5% to 69.7%; LLaDA: 65.6% to 64.0%) by supplying the missing structure, enabling generalization across formats. Table 2: Ablation on remasking. Mf uses base model’s mean-field prediction as confidence; Mar uses marginals under constrained distribution as confidence.                             
+
+> Dream LLaDA Task Base Mf Mar Base Mf Mar xLAM (JS) 74.6 77.5 76.6 67.8 69.1 69.0 xLAM (Py) 56.1 68.4 76.4 60.1 58.7 71.4
+> BFCL-L (JS) 63.9 69.4 71.5 59.6 64.9 65.6
+> BFCL-L (Py) 22.4 61.5 69.7 50.3 61.5 64.0
+
+Improvements come from both filtering invalid se-quences and remasking under the constrained distri-bution. We compare two remasking strategies. (Mf) uses the baseline’s mean-field prediction as confidence to se-lect positions. (Mar) recomputes confidence as marginal probabilities under the constrained distribution, changing the decoding order itself. Table 2 shows that Mar outper-forms Mf, with the gap largest when the unconstrained baseline performs poorly. This pattern suggests “filtering” alone cannot find high-probability valid sequences when the model’s mean-field is misaligned with the constraint; recomputing marginals provides the missing signal. 
+
+5.3 Ablation and Analysis Runtime overhead is small relative to accuracy gains. We measure per-sample latency, throughput, and accuracy on a 200-example subset of BFCL. As shown in Table 3, our tree variant improves accuracy by 12 points over the unconstrained baseline while incurring only 4% wall-clock overhead. This shows that finite automaton inference is lightweight compared to dLLM and parallelizes well. 
+
+Scaling with fewer generation steps. Figure 4 evaluates Dream and LLaDA on the BFCL simple split as denoising steps decrease from 256 to 16. Baseline performance drops sharply with fewer steps, whereas our method remains much more robust. With more parallelism, unconstrained sampling produces more invalid tokens, whereas our method maintains valid structure and preserves accuracy. 8Table 3: Runtime, accuracy, and throughput scaling on 200 BFCL examples (Dream). Latency uses batch size 1; throughput reports tokens/s as batch size increases. Measured on an A6000. Overhead is wall-clock relative to the unconstrained baseline. Mean ± std over 3 seeds.                                                                      
+
+> Method Accuracy Latency Throughput (tok/s) s/sample Overhead bs=1 bs=2 bs=4
+> Unconstrained 67.5 24.26 ±0.05 —10.55 ±0.02 10.79 ±0.06 11.17 ±0.05 Ours (chain) 78.5 ±0.2 51.92 ±0.14 +114% 4.93 ±0.01 6.88 ±0.06 8.62 ±0.05 Ours (tree) 79.2 ±0.5 25.35 ±0.04 +4% 10.10 ±0.02 10.21 ±0.02 10.44 ±0.03 16 32 64 128 256
+> Denoising Steps
+> 0
+> 25
+> 50
+> 75
+> 100
+> Accuracy (%)
+> Dream (Python) 16 32 64 128 256
+> Denoising Steps
+> 0
+> 25
+> 50
+> 75
+> 100
+> Dream (JSON) 16 32 64 128 256
+> Denoising Steps
+> 0
+> 25
+> 50
+> 75
+> 100
+> LLaDA (Python) 16 32 64 128 256
+> Denoising Steps
+> 0
+> 25
+> 50
+> 75
+> 100
+> LLaDA (JSON)
+> base
+> ours
+
+Figure 4: Accuracy vs. denoising steps on BFCL Simple split. Our method remains robust as the number of denoising steps decreases, whereas the unconstrained baseline deteriorates sharply. Table 4: BFCL accuracy (%) comparing diffusion LLMs and autoregressive LLMs (Python format), with autoregressive results from BFCL leaderboard [ 17 ]. Our method substantially narrows the gap.                    
+
+> Diffusion LLMs (dLLMs) Autoregressive LLMs Setting Dream Dream + Ours LLaDA LLaDA + Ours Llama-3.1-8B Qwen3-8B Non-live 36.3 78.3 71.4 83.8 84.0 88.6 Live 22.4 69.7 50.3 64.0 70.8 80.1
+
+Comparison with dLLMs and autoregressive LLMs of similar size. Table 4 compares diffusion LLMs with similarly sized autoregressive models on BFCL. Unconstrained diffusion models perform substantially worse and our method substantially narrows the gaps. 
+
+NFAs vs. DFAs. The constrained decoding workload spans over three orders of magnitude, from a 21-state DFA for Sudoku, to DFAs with ∼1k states for function calling, and NFAs with ∼10k states and ∼100k edges for Spider. We use DFAs when their sizes are feasible and fall back to NFAs for Spider, where the equivalent DFA would be exponentially large (Details in Appendix C). 
+
+## 6 Conclusion 
+
+We propose a constrained decoding algorithm for diffusion language models under constraints expressible as finite automata. Viewing finite automata as graphical models, our approach performs exact and tractable sampling/inference over the constrained mean-field posterior at each denoising step, guaranteeing constraint satisfaction. We further propose a log-depth sampling strategy to unlock greater parallelization, yielding low overhead in practice. Our approach substantially improves model performance across a variety of downstream tasks where unconstrained models struggle. 
+
+## 7 Limitations and Societal Impacts 
+
+Our method focuses on finite automata, and does not cover richer constraints such as context-free grammars. Constrained decoding can improve the reliability of LLM systems used for function calling and other structured-output applications. However, if misused, this method could enable the generation of syntactically valid but malicious tool calls or database queries, increasing the risk of unintended or harmful system actions. 9References 
+
+[1] Jacob Austin, Daniel D Johnson, Jonathan Ho, Daniel Tarlow, and Rianne Van Den Berg. Structured denoising diffusion models in discrete state-spaces. In Advances in Neural Information Processing Systems ,volume 34, pages 17981–17993, 2021. [2] Meihua Dang, Linxin Song, Honghua Zhang, Jieyu Zhao, Guy Van den Broeck, and Stefano Ermon. Mitigating bias in locally constrained decoding via tractable proposals. In International Conference on Machine Learning , 2026. [3] Yixin Dong, Charlie F Ruan, Yaxing Cai, Ziyi Xu, Yilong Zhao, Ruihang Lai, and Tianqi Chen. XGrammar: Flexible and efficient structured generation engine for large language models. Proceedings of Machine Learning and Systems , 7, 2025. [4] Google DeepMind. Gemini diffusion. https://blog.google/innovation-and-ai/ models-and-research/google-deepmind/gemini-diffusion/ , 2025. Google AI Blog. [5] Guidance AI. Guidance: A guidance language for controlling large language models. https://github. com/guidance-ai/guidance , 2023. [6] John E. Hopcroft, Rajeev Motwani, and Jeffrey D. Ullman. Introduction to Automata Theory, Languages, and Computation . Pearson, 3 edition, 2006. [7] Inception Labs, Samar Khanna, Siddhant Kharbanda, Shufan Li, Harshit Varma, Eric Wang, Sawyer Birnbaum, Ziyang Luo, Yanis Miraoui, Akash Palrecha, Stefano Ermon, Aditya Grover, and Volodymyr Kuleshov. Mercury: Ultra-Fast Language Models Based on Diffusion. arXiv preprint arXiv:2506.17298 ,2025. [8] Fangyu Lei, Jixuan Chen, Yuxiao Ye, Ruisheng Cao, Dongchan Shin, Hongjin Su, Zhaoqing Suo, Hongcheng Gao, Wenjing Hu, Pengcheng Yin, Victor Zhong, Caiming Xiong, Ruoxi Sun, Qian Liu, Sida Wang, and Tao Yu. Spider 2.0: Evaluating language models on real-world enterprise text-to-SQL workflows. In International Conference on Learning Representations , 2025. [9] Zuxin Liu, Thai Hoang, Jianguo Zhang, Ming Zhu, Tian Lan, Shirley Kokane, Juntao Tan, Weiran Yao, Zhiwei Liu, Yihao Feng, Rithesh Murthy, Liangwei Yang, Silvio Savarese, Juan Carlos Niebles, Huan Wang, Shelby Heinecke, and Caiming Xiong. APIGen: Automated pipeline for generating verifiable and diverse function-calling datasets. In Advances in Neural Information Processing Systems , 2024. [10] Aaron Lou, Chenlin Meng, and Stefano Ermon. Discrete diffusion modeling by estimating the ratios of the data distribution. In International Conference on Machine Learning , 2024. [11] Seyed Iman Mirzadeh, Keivan Alizadeh, Hooman Shahrokhi, Oncel Tuzel, Samy Bengio, and Mehrdad Farajtabar. GSM-Symbolic: Understanding the limitations of mathematical reasoning in large language models. In International Conference on Learning Representations , 2025. [12] Niels Mündler, Jasper Dekoninck, and Martin Vechev. Constrained decoding of diffusion LLMs with context-free grammars. In International Conference on Learning Representations , 2026. [13] Shen Nie, Fengqi Zhu, Zebin You, Xiaolu Zhang, Jingyang Ou, Jun Hu, Jun Zhou, Yankai Lin, Ji-Rong Wen, and Chongxuan Li. Large language diffusion models. In Advances in Neural Information Processing Systems , 2025. [14] Jingyang Ou, Shen Nie, Kaiwen Xue, Fengqi Zhu, Jiacheng Sun, Zhenguo Li, and Chongxuan Li. Your absorbing discrete diffusion secretly models the conditional distributions of clean data. In International Conference on Learning Representations , 2025. [15] Kanghee Park, Timothy Zhou, and Loris D’Antoni. Flexible and efficient grammar-constrained decoding. In International Conference on Machine Learning , 2025. [16] Shishir G. Patil, Tianjun Zhang, Xin Wang, and Joseph E. Gonzalez. Gorilla: Large language model connected with massive apis. In Advances in Neural Information Processing Systems , 2024. [17] Shishir G Patil, Huanzhi Mao, Fanjia Yan, Charlie Cheng-Jie Ji, Vishnu Suresh, Ion Stoica, and Joseph E. Gonzalez. The Berkeley function calling leaderboard (BFCL): From tool use to agentic evaluation of large language models. In International Conference on Machine Learning , 2025. [18] Judea Pearl. Reverend Bayes on inference engines: A distributed hierarchical approach. In Proceedings of the AAAI Conference on Artificial Intelligence , 1982. 
+
+10 [19] Judea Pearl. Probabilistic Reasoning in Intelligent Systems: Networks of Plausible Inference . Morgan Kaufmann, 1988. [20] Gabriel Poesia, Alex Polozov, Vu Le, Ashish Tiwari, Gustavo Soares, Christopher Meek, and Sumit Gulwani. Synchromesh: Reliable code generation from pre-trained language models. In International Conference on Learning Representations , 2022. [21] Lawrence Rabiner and Biinghwang Juang. An introduction to hidden Markov models. IEEE ASSP Magazine , 3(1), 1986. [22] Subham Sahoo, Marianne Arriola, Yair Schiff, Aaron Gokaslan, Edgar Marroquin, Justin Chiu, Alexander Rush, and Volodymyr Kuleshov. Simple and effective masked diffusion language models. In Advances in Neural Information Processing Systems , volume 37, pages 130136–130184, 2024. [23] Torsten Scholak, Nathan Schucher, and Dzmitry Bahdanau. PICARD: Parsing incrementally for constrained auto-regressive decoding from language models. In Proceedings of the Conference on Empirical Methods in Natural Language Processing , 2021. [24] Yujia Shen, Arthur Choi, and Adnan Darwiche. Tractable operations for arithmetic circuits of probabilistic models. In Advances in Neural Information Processing Systems , volume 29, 2016. [25] Jiaxin Shi, Kehang Han, Zhe Wang, Arnaud Doucet, and Michalis Titsias. Simplified and generalized masked diffusion for discrete data. In Advances in Neural Information Processing Systems , volume 37, pages 103131–103167, 2024. [26] Richard Shin, Christopher Lin, Sam Thomson, Charles Chen, Subhro Roy, Emmanouil Antonios Platanios, Adam Pauls, Dan Klein, Jason Eisner, and Benjamin Van Durme. Constrained language models yield few-shot semantic parsers. In Proceedings of the Conference on Empirical Methods in Natural Language Processing , 2021. [27] Yuxuan Song, Zheng Zhang, Cheng Luo, Pengyang Gao, Fan Xia, Hao Luo, Zheng Li, Yuehang Yang, Hongli Yu, Xingwei Qu, et al. Seed diffusion: A large-scale diffusion language model with high-speed inference. arXiv preprint arXiv:2508.02193 , 2025. [28] Tarun Suresh, Debangshu Banerjee, Shubham Ugare, Sasa Misailovic, and Gagandeep Singh. DINGO: Constrained inference for diffusion LLMs. In Advances in Neural Information Processing Systems , 2025. [29] Shubham Ugare, Tarun Suresh, Hangoo Kang, Sasa Misailovic, and Gagandeep Singh. SynCode: LLM generation with grammar augmentation. Transactions on Machine Learning Research , 2025. [30] L. G. Valiant, S. Skyum, S. Berkowitz, and C. Rackoff. Fast parallel computation of polynomials using few processors. SIAM Journal on Computing , 12(4):641–644, 1983. [31] Antonio Vergari, YooJung Choi, Anji Liu, Stefano Teso, and Guy Van den Broeck. A compositional atlas of tractable circuit operations for probabilistic inference. In Advances in Neural Information Processing Systems , 2021. [32] Brandon T. Willard and Rémi Louf. Efficient guided generation for large language models. arXiv preprint arXiv:2307.09702 , 2023. [33] Jiacheng Ye, Shansan Gong, Liheng Chen, Lin Zheng, Jiahui Gao, Han Shi, Chuan Wu, Xin Jiang, Zhenguo Li, Wei Bi, and Lingpeng Kong. Diffusion of thought: Chain-of-thought reasoning in diffusion language models. In Advances in Neural Information Processing Systems , 2024. [34] Jiacheng Ye, Zhihui Xie, Lin Zheng, Jiahui Gao, Zirui Wu, Xin Jiang, Zhenguo Li, and Lingpeng Kong. Dream 7B: Diffusion large language models. arXiv preprint arXiv:2508.15487 , 2025. [35] Tao Yu, Rui Zhang, Kai Yang, Michihiro Yasunaga, Dongxu Wang, Zifan Li, James Ma, Irene Li, Qingning Yao, Shanelle Roman, Zilin Zhang, and Dragomir Radev. Spider: A large-scale human-labeled dataset for complex and cross-domain semantic parsing and text-to-SQL task. In Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing , 2018. [36] Honghua Zhang, Benjie Wang, Marcelo Arenas, and Guy Van den Broeck. Restructuring tractable probabilistic circuits. In International Conference on Artificial Intelligence and Statistics , 2025. [37] Yitong Zhang, Yongmin Li, Yuetong Liu, Jia Li, Xiaoran Jia, Zherui Li, and Ge Li. Lookahead-then-Verify: Reliable constrained decoding for diffusion LLMs under context-free grammars. arXiv preprint arXiv:2602.00612 , 2026. 
+
+11 [38] Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Chuyue Sun, Jeff Huang, Cody Hao Yu, Shiyi Cao, Christos Kozyrakis, Ion Stoica, Joseph E. Gonzalez, Clark Barrett, and Ying Sheng. SGLang: Efficient execution of structured language model programs. In Advances in Neural Information Processing Systems ,2024. 
+
+## A Forward-Backward Inference for Chain-Structured Graphical Models 
+
+We give the standard forward–backward algorithm for the chain-structured graphical model defined in Section 3.2 (Figure 1). We first present the edge-space formulation, which mirrors the edge-valued latents zt ∈ E used in the main text, and then aggregate edge messages by their endpoint state to obtain the equivalent state-space formulation, which has lower cost. This is a reformulation of the standard hidden Markov models backward message passing and sampling algorithm [21]. 
+
+A.1 Edge Space 
+
+We use the unnormalized factors of Section 3.2: 
+
+
+
+g(xi = v | zi = e) := pM(xi = v | zi = e) · pθ (xi = v | xt),g(z1 = e) := pM(z1 = e),g(zi = e′ | zi−1 = e) := pM(zi = e′ | zi−1 = e).
+
+We sample from g in two passes. 
+
+Backward pass. Define backward messages 
+
+βt : E → R≥0 for t = 1 , . . . , L, 
+
+where βt(e) is the partition function of the suffix (zt+1: L, x t+1: L) under g given zt = e restricted to constraint-satisfying sequences. With the base case absorbing the accept condition 
+
+βL(e) = 1[dst( e) ∈ F ],
+
+the recurrence for t = L−1, L −2, . . . , 1 is 
+
+βt(e) = X
+
+> e′∈E
+
+g(zt+1 =e′ | zt=e) X
+
+> v∈V
+
+g(xt+1 =v | zt+1 =e′)
+
+!
+
+βt+1 (e′).
+
+The structural constraints live inside g: g(zt+1 | zt) vanishes unless the edges chain end-to-end, and 
+
+g(xt+1 | zt+1 ) vanishes outside the edge label set, so the sums above effectively range over chained successors and label-compatible tokens. 
+
+Forward sampling pass. We start by sampling (z1, x 1) jointly from 
+
+P z1 = e, x 1 = v ∝ g(z1 = e) g(x1 = v | z1 = e) β1(e). (8) For each subsequent step t = 2 , . . . , L , conditional on the previously sampled zt−1, jointly sample 
+
+(zt, x t) with probability 
+
+P zt = e, x t = v ∝ g(zt = e | zt−1) g(xt = v | zt = e) βt(e), (9) with the convention g(z1 | z0) := g(z1) for the initial step. The factor βt(e) reweights each candidate edge by the probability that the suffix from dst( e) extends into an accepting state. By construction, the resulting x1: L is the marginal of g/Z where Z is the partition restricted to accepting paths. 
+
+Time complexity. The backward message-passing pass costs O(L(|E| 2 + |E||V| )) FLOPs: the 
+
+O(L|E| 2) term comes from edge-to-edge message propagation, while the O(L|E||V| ) term arises from emission reweighting using LM probabilities. The forward pass for sampling zi and xi with 
+
+1 ≤ i ≤ L adds O(L(|E| + |V| )) FLOPs of work. 12 A.2 State Space 
+
+The same chain admits an equivalent presentation over states. Aggregating edges by their endpoints yields state-valued latents st ∈ S for t = 0 , 1, . . . , L (with s0 pinned to the FA’s initial state), and the joint factors of g become 
+
+
+
+g(s0) = 1[s0 = sinit 0 ],g(st, x t = v | st−1) = X 
+
+> e: src( e)= st−1,dst( e)= st
+
+g(xt = v | zt = e),
+
+together with the accept indicator 1[sL ∈ F ]. The joint transition factor aggregates contributions from all edges that traverse the same state pair, naturally handling NFAs where multiple edges may connect st−1 to st. It is convenient to define the per-position transition matrix 
+
+Mt ∈ R|S|×|S| ≥0 , Mt(s, s ′) := X
+
+> v∈V
+
+g(st = s′, x t = v | st−1 = s),
+
+which marginalizes over the emitted token. 
+
+Backward pass. Define βt : S → R≥0 for t = 0 , 1, . . . , L (overloading the symbol; the argument type disambiguates state from edge). With 
+
+βL(s) = 1[s ∈ F ], βt−1(s) = X
+
+> s′∈S
+
+Mt(s, s ′) βt(s′),
+
+this is the standard HMM backward recurrence with transition matrix Mt, related to the edge-space messages by βt(s) = βt(e) for any edge e with dst( e) = s (well-defined since edge-space βt(e)
+
+depends on e only through dst( e)). 
+
+Forward sampling pass. Initialize s0 = sinit 0 . For each t = 1 , 2, . . . , L , jointly sample (st, x t)
+
+with probability 
+
+P(st = s′, x t = v | st−1) ∝ g(st = s′, x t = v | st−1) βt(s′).
+
+Time complexity. Each backward update is O(|S| 2), forming Mt over the vocabulary costs 
+
+O(|E| |V| ) per position, and forward sampling at each position contributes O(|S| + |V| ) via the staged (st, x t) draw described above. The total state-space cost is O L (|S| 2 + |E| |V| ), improving over the naive O(L |E| 2) edge-space cost. 
+
+## B Parallel Sampling Algorithm 
+
+We show that Algorithm 1 produces samples distributed exactly as the constrained posterior p(x0 |
+
+xt, C), despite using unnormalized conditionals during sampling. 
+
+Proposition B.1. Let p(x0 | xt) denote the diffusion model’s mean-field predictions, and let C be a constraint encoded as a finite automaton with state space S. Algorithm 1 returns a sample x0
+
+distributed exactly as 
+
+p(x0 | xt, C) ∝ p(x0 | xt) · 1[x0 ∈ L (C)] .
+
+Proof. We proceed by induction on the recursion depth. 
+
+Base case. At a leaf of the recursion (segment with boundary states zℓ, z r satisfying r − ℓ ≤ 1), the algorithm samples a single token xℓ from the conditional p(xℓ | zℓ, z r ). Since xℓ ranges over a finite vocabulary, this categorical distribution can be normalized exactly by summing over its support, and the resulting sample is exact. 
+
+Inductive step. Consider a segment [ℓ, r ] with boundary states zℓ, z r and midpoint m. The algo-rithm performs three steps: 1. Sample zm from p(zm | zℓ, z r ) ∝ p(zm | zℓ) · p(zr | zm).13 2. Recursively sample xℓ:m−1 from the left subproblem with endpoints (zℓ, z m).3. Recursively sample xm:r−1 from the right subproblem with endpoints (zm, z r ).Step 1 is a categorical sampling problem over the finite state space S, and the unnormalized scores can be summed and normalized exactly in O(|S| ). By the inductive hypothesis, steps 2 and 3 produce exact samples from their respective conditional distributions. By d-separation in the hidden Markov model induced by p(x0 | xt, C) (Figure 1), conditioning on zℓ, z m, z r renders xℓ:m−1 and xm:r−1
+
+independent. Hence the joint distribution over the segment factors as 
+
+p(xℓ:r−1, z m | zℓ, z r ) = p(zm | zℓ, z r ) · p(xℓ:m−1 | zℓ, z m) · p(xm:r−1 | zm, z r ),
+
+which is precisely the distribution sampled by steps 1–3. Thus the segment-level sample is exact. 
+
+Composition. The boundary states z1, z L+1 at the root of the recursion are sampled from their joint marginal p(z1, z L+1 ), which is computed exactly from the precomputed skip-transitions. Combined with the inductive argument above, the full sample x0 is distributed exactly as p(x0 | xt, C).
+
+Remark on unnormalized conditionals. Although each conditional p(zm | zℓ, z r ) is written up to a (zℓ, z r )-dependent normalization constant, this poses no issue for exactness: at sampling time, the constant is computed by summing the |S| unnormalized scores, and the resulting categorical distribution is exact. Different segments use different normalization constants, as they should—each subproblem is conditioned on different endpoint values, and the chain-rule decomposition above ensures these segment-local normalizers compose into the correct joint distribution. 
+
+## C Experiment Details 
+
+C.1 Generation Configurations 
+
+Table 5 summarizes the generation hyperparameters used for each task. We follow the default decoding configurations released with each model. Generation length and number of denoising steps are matched across models within each task to ensure a fair comparison. Table 5: Generation settings per task across the evaluated diffusion language models. All runs use temperatures T = 0 and T = 1 . The Remasking column reports the algorithm for both unconstrained and constrained decoding; for constrained runs, confidence values are recomputed from the constrained distribution.                                                               
+
+> Task Model Seq Length Steps Block Size Remasking
+> BFCL (Python / JSON) LLaDA-8B-Instruct 256 128 32 low_confidence Dream-v0-Instruct-7B 256 128 —entropy xLAM (Python / JSON) LLaDA-8B-Instruct 128 64 32 low_confidence Dream-v0-Instruct-7B 128 64 —entropy Sudoku 4 ×4LLaDA-8B-Base 32 32 32 low_confidence Dream-v0-Base-7B 32 32 —entropy Countdown (cd3) LLaDA-8B-Base 32 32 32 low_confidence Dream-v0-Base-7B 32 32 —entropy GSM-Symbolic LLaDA-8B-Instruct 128 64 32 low_confidence Dream-v0-Instruct-7B 128 64 —entropy Spider LLaDA-8B-Instruct 128 64 32 low_confidence Dream-v0-Instruct-7B 128 64 —entropy
+
+14 C.2 Prompt Templates 
+
+We provide representative prompts and expected outputs for each evaluation task in Table 6. Table 6: Representative prompts and expected outputs for each evaluation task. Repeated system prompts and in-context examples are omitted for space. 
+
+Task Example Prompt Example Answer Function Calling (BFCL/ xLAM) 
+
+Python Format System : You are an expert in composing functions. You are given a question and a set of possible functions. Based on the question, you will need to make one or more function/tool calls to achieve the purpose. If none of the functions can be used, point it out. If the given question lacks the parameters required by the function, also point it out. You should only return the function calls in your response. If you decide to invoke any of the function(s), you MUST put it in the format of: 
+
+[func_name1(params_name1=params_value1, params_name2=params_value2, ...), func_name2(params)] 
+
+You SHOULD NOT include any other text in the response. At each turn, you should try your best to complete the tasks requested by the user within the current turn. Continue to output functions to call until you have fulfilled the user’s request to the best of your ability. Once you have no more functions to call, the system will consider the current turn complete and proceed to the next turn or task. Here is a list of functions in JSON format that you can invoke: 
+
+{"name": "calculate_triangle_area", "description": "Calculate the area of a triangle.", "parameters": {"base": integer, "height": integer }}
+
+User: Find the area of a triangle with a base of 10 units and height of 5 units. 
+
+[calculate _triangle_area (base=10, height=5)] 
+
+Function Calling (BFCL/ xLAM) 
+
+JSON Format System: (...same as above...) 
+
+If you decide to invoke any of the function(s), you MUST put it in the format of a JSON array: 
+
+[{"name": "func_name1", "arguments": {"params_name1": params_value1, ...}}, ...] 
+
+(...same as above...) User: Find the area of a triangle with a base of 10 units and height of 5 units. 
+
+[{"name": "calculate _triangle_area", "arguments": {"base": 10, "height": 5}}] 
+
+Sudoku Fill the positions where the values are 0 in a 4 ×4 grid with digits 1–4 so that each column, each row, and each of the four 2 ×2 subgrids that compose the grid contains all of the digits from 1 to 4. 
+
+(In-context examples are omitted) 
+
+Input: 
+
+1003 0300 3210 4132 
+
+Output: 
+
+1423 2341 3214 4132 
+
+continued on next page 
+
+15 Table 6 continued from previous page 
+
+Task Example Prompt Example Answer Countdown Given 4 numbers, use +, −, ×, ÷ to operate over the first three numbers to achieve the last one. 
+
+(In-context examples are omitted) Input: 61, 83, 8, 30 
+
+Output: 
+
+83-61=22, 8+22=30 
+
+Math Reasoning (GSM-Symbolic) 
+
+System: You are an expert in solving grade school math tasks. You will be presented with a grade-school math word problem with symbolic variables and be asked to solve it. Before answering you should reason about the problem (using the 
+
+<reasoning> field in the response described below). Intermediate symbolic expressions generated during reasoning should be wrapped in « » .Only output the symbolic expression wrapped in « » that answers the question. The expression must use numbers as well as the variables defined in the question. You are only allowed to use the following operations: +, -, /, //, %, *, ** .You will always respond in the format described below: 
+
+Let’s think step by step. <reasoning> The final answer is «symbolic expression» 
+
+(4 in-context examples are omitted) User: Rania saw a 210-foot whale with 7 72-inch remoras attached to it. What percentage of the whale’s body length is the combined length of the remoras? Let’s think step by step. The combined length of the remoras in inches is 
+
+«7 * 72» .Convert to feet: 
+
+«7 * 72 / 12» .Percentage: 
+
+«7 * 72 / 12 / 210 * 100» .The final answer is 
+
+«7 * 72 / 12 / 210 * 100» .
+
+Text-to-SQL (Spider) 
+
+System: You are an expert in SQL. Given a database schema and a question, write a correct SQL query. 
+
+User: Here is the database schema: 
+
+CREATE TABLE stadium ( stadium_id INT PRIMARY KEY, location TEXT, name TEXT, capacity INT, highest INT, lowest INT, average INT ); 
+
+(...more database omitted...) 
+
+Question: How many singers do we have? 
+
+SELECT count(*) FROM singer 
+
+16 C.3 Finite Automata Statistics 
+
+Table 7 reports the per-benchmark distribution of automaton sizes for the Dream-7B and LLaDA-8B tokenizers. For each benchmark we list the number of automata N used during evaluation and, across those N automata, the median, 95th percentile, and maximum of the node and edge counts. Reporting the median (rather than the mean) reflects the size of a typical instance, and the 95th percentile and maximum quantify the heavy right tail driven by a small number of large schemas. Table 7: Automaton sizes across benchmarks (Dream-7B and LLaDA-8B tokenizers). All tasks use DFAs except Spider (NFA due to exponential blowup on DFA). We report number of automata 
+
+N , state counts (tokenizer-independent), and edge counts for each tokenizer (median / P95 / max). GSM-Symbolic uses a single automaton.                                                                                                                       
+
+> # States Edges (Dream) Edges (LLaDA) Task NMed P95 Max Med P95 Max Med P95 Max xLAM JSON 1000 154 387 1,400 542 1,539 7,414 507 1,415 6,550 xLAM Python 1000 102 287 1,227 397 1,280 6,986 374 1,222 6,154 BFCL NL JSON 1000 122 357 818 409 1,213 3,968 386 1,134 3,572 BFCL L JSON 1351 385 997 2,459 1,317 3,932 9,901 1,233 3,672 9,128 BFCL NL Python 1000 90 272 713 319 975 3,738 304 936 3,342 BFCL L Python 1351 301 778 1,613 1,112 2,839 7,576 1,042 2,694 6,704 Sudoku 900 21 21 21 21 21 21 21 21 21 Countdown 993 47 55 77 53 63 88 52 62 87 GSM-Symbolic 156 –56 745 –745 748 –748 Spider 20 8,796 15,573 19,509 85,415 168,920 171,580 70,477 142,469 144,591
+
+17 D Qualitative Examples on BFCL 
+
+Table 8 shows four representative cases on live_simple : in each one the model has the right intent but cannot keep its output inside the tool schema. Constraining decoding to the schema FA eliminates these failures by construction, recovering all four examples. Table 8: Handling constraint violations on BFCL-Live (Dream-Instruct, T =0 ). The baseline often produces outputs that violate the tool specification, and receives 0% accuracy. E.g., prose instead of a tool call, incorrect casing, or hallucinated function names. Our constrained generation guarantees syntactically valid tool calls by construction (constraint satisfaction rate = 100% ) and is also semantically correct on these examples. 
+
+(a) JSON: baseline emits prose instead of a tool call. 
+
+User “I have a customer query asking for ‘Need ATM location’. Which category should it be classified under?” 
+
+Tool record(atm_finder_start: list[str], ...) – 6 enum-keyed list args. 
+
+Base The customer query ’Need ATM location’ should fall under the ‘atm_finder_start’ category. (,→ Invalid format: not a JSON tool-call list.) 
+
+Ours [{"name": "record", "arguments": {"atm_finder_start": ["Need ATM location"]}}] (correct) 
+
+(b) JSON: wrong argument-name casing breaks the schema. 
+
+User “Retrieve today’s alerts for sensor Q3CC-CRT3-SZ2G, max 10 alerts per page.” 
+
+Tool get_sensor_alerts(perPage: int*, sensorSerial: str*, ...) 
+
+Base [{"name": "get_sensor_alerts", "arguments": {"PerPage": 10, "t0": "2023-10-01", "sensorSerial": "Q3CC-CRT3-SZ2G"}}] (,→ missing required ‘per-Page’; t0 hallucinated.) 
+
+Ours [{"name": "get_sensor_alerts", "arguments": {"perPage": 10, "sensorSerial": "Q3CC-CRT3-SZ2G"}}] (correct) 
+
+(c) Python: hallucinated function name (dotted-method that doesn’t exist in the tool list). 
+
+User “I’ve completed the task ‘Submit monthly financial report’. Mark it as completed.” 
+
+Tool todo(type: enum["complete", ...], content: str) 
+
+Base [todo.complete(content="Submit monthly financial report")] (,→ function name ‘todo.complete’ not in tool list.) 
+
+Ours [todo(type="complete", content="Submit monthly financial report")] 
+
+(correct) 
+
+(d) Python: typo in argument name. 
+
+User “Find me a Comic movie directed by Nitesh Tiwari.” 
+
+Tool Movies_3_FindMovies(directed_by, genre, cast) 
+
+Base [Movies_3_FindMovies(ddirected_by="Nitesh Tiwari", genre="Comedy")]  
+
+> (,→unexpected parameter ‘ddirected_by’.)
+
+Ours [Movies_3_FindMovies(directed_by="Nitesh Tiwari", genre="Comedy")] 
+
+(correct) 
+
+18 Constraining the output to the schema is not the same as constraining it to the gold answer. Table 9 shows three failures that survive our decoder: the schema accepts every output, but the value the model chose disagrees with the reference. These are the errors a token-level grammar cannot fix. Table 9: Failure modes under constrained decoding on BFCL-Live (Dream-Instruct, T =0 ). All outputs satisfy the schema FA (valid format, function name, and argument types), but are still rejected by the official scorer because some argument values differ from the ground truth. These errors cannot be ruled out by token-level constraints: the model must choose among multiple schema-valid options and selects the wrong one. 
+
+(a) Over-specified location – model copies the user’s parenthetical landmark. 
+
+User “Tell me the current weather in Yosemite National Park, which locates at Mariposa, CA, in Celsius.” 
+
+Tool get_current_weather(location: str, unit: str) 
+
+Ours [{"name": "get_current_weather", "arguments": {"location": "Yosemite National Park, Mariposa, CA", "unit": "celsius"}}] 
+
+Gold location = "Mariposa, CA" (,→ schema OK; string-mismatch for location .) 
+
+(b) Hallucinated argument value – enum-legal but not the gold default. 
+
+User “Set the air conditioner to cool mode.” (no wind speed, no temperature given) 
+
+Tool ThinQ_Connect(body: dict) with body.windStrength ∈ {LOW, MID, HIGH}. 
+
+Ours [ThinQ_Connect(body={..., "windStrength": "HIGH", "coolTargetTemperature": 24, ...})] 
+
+Gold windStrength = "MID" , no targetTemperature . (,→ FA accepts every enum value; LM picked the wrong one.) 
+
+(c) Missing optional-but-inferable argument. 
+
+User “I made a $59.99 purchase in San Francisco, California. How much sales tax?” 
+
+Tool calculate_tax(purchase_amount, state, county, city, ...) 
+
+Ours [{"name": "calculate_tax", "arguments": {"purchase_amount": 59.99, "state": "CA"}}] 
+
+Gold state="CA", county="San Francisco", city="San Francisco" (,→ county and  
+
+> city are schema-optional; LM omitted them.)
+
+## E Additional Experiment Results 
+
+Scaling with the difficulty of problems. In Sudoku, we vary the number of prefilled cells from 12 to 4, with fewer prefilled cells corresponding to more difficult puzzles. As shown in Figure 5, baseline performance drops sharply as the puzzles become harder. A common failure mode is that the model modifies prefilled cells, violating the puzzle constraints. Enforcing that these cells remain fixed effectively reduces the task to a text-infilling problem, leading to substantial improvements. Confidence-based scheduling further boosts performance by guiding decoding toward more likely valid solutions, particularly on the hardest puzzles where the base model struggles. 45678910 11 12 
+
+> # Filled Digits
+> 0
+> 25
+> 50
+> 75
+> 100
+> Accuracy (%)
+> Dream
+> base
+> ours (Mf)
+> ours (Mar) 45678910 11 12
+> # Filled Digits
+> 0
+> 25
+> 50
+> 75
+> 100
+> LLaDA
+
+Figure 5: Sudoku 4 ×4 accuracy versus the number of prefilled digits (fewer digits indicate harder puzzles). Mf uses mean-field confidence from the base model, while Mar uses marginals under the constrained distribution. 19

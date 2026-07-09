@@ -1,0 +1,24 @@
+{
+  "label": "2026-07-09",
+  "date": "2026-07-09",
+  "generated_at": "2026-07-09T20:30:42",
+  "count": 1,
+  "papers": [
+    {
+      "paper_id": "202607/09/2607.07026v1-constrained-decoding-for-diffusion-language-models-via-efficient-inference-over-finite-automata",
+      "section": "deep",
+      "title_en": "Constrained Decoding for Diffusion Language Models via Efficient Inference over Finite Automata",
+      "authors": "Meihua Dang, Stefano Ermon",
+      "date": "2026-07-08",
+      "pdf": "https://arxiv.org/pdf/2607.07026v1",
+      "score": "9.0",
+      "evidence": "扩散语言模型的约束解码",
+      "tldr": "扩散语言模型在约束解码时面临挑战，因为它们同时采样多个位置，无法沿用自回归模型从左到右的掩码策略。本文提出一种基于有限自动机的精确算法，将自动机视为图形模型，得到约束后验的可处理表示，实现高效采样。该方法保证约束满足，支持贪心和随机解码，并兼容并行和块状解码。在Dream-7B和LLaDA-8B上，函数调用、规划、Text-to-SQL等任务准确率显著提升，例如BFCL-Live上贪心解码从63.9%升至71.5%，且额外开销低于5%。这是首个为扩散模型提供高效约束解码的方案，通过深度缩减使采样深度从线性降为对数。",
+      "tags": "query:diffusion-lm",
+      "abstract_en": "Constrained decoding is essential for serving LLMs, ensuring that generated outputs follow specific structures such as JSON schema-formatted function calls. Existing systems are designed for autoregressive models and assume left-to-right generation, masking out invalid next tokens at each step. Diffusion language models, however, break this assumption: they sample multiple positions simultaneously from a fully-factorized mean-field distribution at each denoising step. In this paper, we present an exact and tractable algorithm for sampling from the constrained mean-field posterior under any constraint expressible as a finite automaton. Viewing finite automata as graphical models, we obtain tractable representations of the constrained distribution that enable efficient inference. The approach guarantees constraint satisfaction by construction, supports both greedy and sampling-based decoding, and is compatible with parallel and block-wise decoding under arbitrary remasking schedules. Applying depth-reduction techniques from arithmetic circuit theory, we further reduce sampling depth from linear to logarithmic in the sequence length. Empirical evaluations on Dream-7B and LLaDA-8B show substantial accuracy gains across various tasks including function calling (xLAM, BFCL), planning (Sudoku, Countdown), text-to-SQL (Spider), and math reasoning (GSM-Symbolic), with little inference overhead relative to unconstrained decoding. For example, on BFCL-Live, our approach improves Dream-7B's greedy decoding accuracy from 63.9% to 71.5%, and stochastic sampling accuracy from 22.3% to 69.0%, where the unconstrained baseline collapses, with under 5% wall-clock overhead.",
+      "source": "arxiv",
+      "selection_source": "fresh_fetch"
+    }
+  ],
+  "errors": []
+}
